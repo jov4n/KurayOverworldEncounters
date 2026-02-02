@@ -1,0 +1,6 @@
+Name       = Voltseon's Overworld Encounters
+Version    = 2.0
+Essentials = 21.1
+Requires   = Kuray's Infinite Fusion, Mod Menu
+Link       = https://voltseon.com/
+Credits    = Voltseon, adapted by Fill to include outbreak, raid battles, fusion encounters, new shiny information and compatibility with Kuray Infinite Fusion

@@ -1,0 +1,212 @@
+# loader for 'Overworld Encounters' and 'rainefallUtils'
+
+# 1. Load Utilities (adapted from rainefallUtils)
+utils_script = "Mods/OverWorldEncounters/000_VOE_Utils.rb"
+if File.exist?(utils_script)
+  Kernel.load(utils_script)
+else
+  # Utils script not found
+end
+
+# 2. Register Mod Settings for Overworld Encounters
+if defined?(ModSettingsMenu)
+  category = "Encounters"
+  
+  ModSettingsMenu.register(:voe_disable_settings, {
+    :name => "Disable Encounters",
+    :type => :toggle,
+    :default => 0, # False (Enabled)
+    :description => "Disable overworld encounters.",
+    :category => category
+  })
+
+  ModSettingsMenu.register(:voe_log_spawns, {
+    :name => "Log Spawns",
+    :type => :toggle,
+    :default => 0,
+    :description => "Log encounter spawns to console.",
+    :category => category
+  })
+  
+  ModSettingsMenu.register(:voe_shiny_rate, {
+    :name => "Shiny Rate (1/X)",
+    :type => :number,
+    :min => 1,
+    :max => 65536,
+    :default => 8192,  # DEBUG: Set to 8192 for normal gameplay
+    :description => "Chance denominator for shiny spawns.",
+    :category => category
+  })
+  
+  ModSettingsMenu.register(:voe_max_distance, {
+    :name => "Spawn Distance",
+    :type => :slider,
+    :min => 1,
+    :max => 20,
+    :default => 12,
+    :description => "Maximum distance from player before despawn.",
+    :category => category
+  })
+  
+  ModSettingsMenu.register(:voe_delete_events, {
+    :name => "Despawn Far Events",
+    :type => :toggle,
+    :default => 1, # True
+    :description => "Remove events that are too far away.",
+    :category => category
+  })
+  
+  ModSettingsMenu.register(:voe_brt_shiny, { # Shortened key to avoid potential length issues
+    :name => "Bright Shinies",
+    :type => :toggle,
+    :default => 1, # True
+    :description => "Shinies are unaffected by day/night tone.",
+    :category => category
+  })
+
+  ModSettingsMenu.register(:voe_colorful_text, {
+    :name => "Colorful Names",
+    :type => :toggle,
+    :default => 1,
+    :description => "Use gender colors for Pokemon names.",
+    :category => category
+  })
+
+  ModSettingsMenu.register(:voe_water_surf_only, {
+    :name => "Water Spawns (Surf)",
+    :type => :toggle,
+    :default => 1,
+    :description => "Only spawn water Pokemon when surfing.",
+    :category => category
+  })
+  
+  ModSettingsMenu.register(:voe_spawn_anim, {
+    :name => "Spawn Animation ID",
+    :type => :number,
+    :min => 0,
+    :max => 999,
+    :default => 2,
+    :description => "Animation ID for spawning Pokemon.",
+    :category => category
+  })
+  
+  ModSettingsMenu.register(:voe_shiny_anim, {
+    :name => "Shiny Animation ID",
+    :type => :number,
+    :min => 0,
+    :max => 999,
+    :default => 53,
+    :description => "Animation ID for shiny Pokemon.",
+    :category => category
+  })
+
+  ModSettingsMenu.register(:voe_delete_shiny, {
+    :name => "Despawn Shinies",
+    :type => :toggle,
+    :default => 0,
+    :description => "Allow shiny Pokemon to despawn.",
+    :category => category
+  })
+  
+  ModSettingsMenu.register(:voe_diff_enc, {
+    :name => "Different Encounters",
+    :type => :toggle,
+    :default => 0,
+    :description => "Use different encounter tables.",
+    :category => category
+  })
+  
+  ModSettingsMenu.register(:voe_enc_table, {
+    :name => "Encounter Table ID",
+    :type => :number,
+    :min => 0,
+    :max => 10,
+    :default => 1,
+    :description => "Encounter table index to use.",
+    :category => category
+  })
+
+  ModSettingsMenu.register(:voe_max_encounters, {
+    :name => "Max Encounters",
+    :type => :slider,
+    :min => 1,
+    :max => 20,
+    :default => 5,
+    :description => "Maximum Pokemon spawned on each map.",
+    :category => category
+  })
+
+  ModSettingsMenu.register(:voe_fusion_encounters, {
+    :name => "Fusion Encounters",
+    :type => :toggle,
+    :default => 1,
+    :description => "Enable wild fusion encounters.",
+    :category => category
+  })
+
+  ModSettingsMenu.register(:voe_fusion_rate, {
+    :name => "Fusion Rate (1/X)",
+    :type => :number,
+    :min => 1,
+    :max => 100,
+    :default => 10,
+    :description => "Chance for encounter to be a fusion.",
+    :category => category
+  })
+
+  ModSettingsMenu.register(:voe_horde_battles, {
+    :name => "Horde Battles (2v1)",
+    :type => :toggle,
+    :default => 1,
+    :description => "Nearby encounters team up against you.",
+    :category => category
+  })
+
+  ModSettingsMenu.register(:voe_horde_distance, {
+    :name => "Horde Distance",
+    :type => :slider,
+    :min => 1,
+    :max => 5,
+    :default => 2,
+    :description => "Max tiles apart for horde battle.",
+    :category => category
+  })
+
+  ModSettingsMenu.register(:voe_spawn_on_load, {
+    :name => "Spawn on Map Load",
+    :type => :toggle,
+    :default => 0, # False (Disabled by default)
+    :description => "Spawn multiple encounters immediately when entering a map.",
+    :category => category
+  })
+
+  ModSettingsMenu.register(:voe_initial_spawn_count, {
+    :name => "Initial Spawn Count",
+    :type => :slider,
+    :min => 1,
+    :max => 15,
+    :default => 6, # Default to 6 (between 5-7)
+    :description => "Number of encounters to spawn when entering a map (if enabled).",
+    :category => category
+  })
+
+else
+  # ModSettingsMenu not defined
+end
+
+# 3. Load VOE Scripts
+# Order matters: Config -> Behavior -> Event Handlers -> Movement
+voe_scripts = [
+  "Mods/OverWorldEncounters/001_VOE_Config.rb",
+  "Mods/OverWorldEncounters/002_VOE_Pokemon Behavior.rb",
+  "Mods/OverWorldEncounters/003_VOE_Event Handlers.rb",
+  "Mods/OverWorldEncounters/004_VOE_Movement.rb"
+]
+
+voe_scripts.each do |script|
+  if File.exist?(script)
+    Kernel.load(script)
+  else
+    # Script not found
+  end
+end
