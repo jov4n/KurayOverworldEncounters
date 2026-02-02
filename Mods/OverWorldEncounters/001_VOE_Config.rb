@@ -92,6 +92,37 @@ class VOESettings
         when :INITIAL_SPAWN_COUNT
           val = ModSettingsMenu.get(:voe_initial_spawn_count)
           return val if val != nil && val.is_a?(Numeric)
+        # Outbreak settings
+        when :OUTBREAK_ENABLED
+          val = ModSettingsMenu.get(:voe_outbreak_enabled)
+          return (val == 1) if val != nil
+        when :OUTBREAK_DURATION
+          val = ModSettingsMenu.get(:voe_outbreak_duration)
+          return [5, 10, 15][val || 1] if val != nil
+        when :OUTBREAK_TYPE
+          val = ModSettingsMenu.get(:voe_outbreak_type)
+          return val if val != nil  # 0 = Mixed, 1 = Same
+        when :OUTBREAK_SHINY_MULT
+          val = ModSettingsMenu.get(:voe_outbreak_shiny_mult)
+          return val if val != nil && val.is_a?(Numeric)
+        when :OUTBREAK_NO_SHINY_DESPAWN
+          val = ModSettingsMenu.get(:voe_outbreak_no_shiny_despawn)
+          return (val == 1) if val != nil
+        when :OUTBREAK_SPAWN_COUNT
+          val = ModSettingsMenu.get(:voe_outbreak_spawn_count)
+          return val if val != nil && val.is_a?(Numeric)
+        when :OUTBREAK_MAX_OVERRIDE
+          val = ModSettingsMenu.get(:voe_outbreak_max_override)
+          return val if val != nil && val.is_a?(Numeric)
+        when :OUTBREAK_SPAWN_RATE
+          val = ModSettingsMenu.get(:voe_outbreak_spawn_rate)
+          return val if val != nil && val.is_a?(Numeric)
+        when :OUTBREAK_RADIUS
+          val = ModSettingsMenu.get(:voe_outbreak_radius)
+          return val if val != nil && val.is_a?(Numeric)
+        when :SHINY_PANIC_ENABLED
+          val = ModSettingsMenu.get(:voe_outbreak_shiny_panic)
+          return val if val != nil
         end
       end
     rescue => e
@@ -120,6 +151,17 @@ class VOESettings
       when :HORDE_DISTANCE then 2
       when :SPAWN_ON_LOAD then false
       when :INITIAL_SPAWN_COUNT then 6
+      # Outbreak defaults
+      when :OUTBREAK_ENABLED then true
+      when :OUTBREAK_DURATION then 10
+      when :OUTBREAK_TYPE then 0
+      when :OUTBREAK_SHINY_MULT then 1
+      when :OUTBREAK_NO_SHINY_DESPAWN then true
+      when :OUTBREAK_SPAWN_COUNT then 6
+      when :OUTBREAK_MAX_OVERRIDE then 12
+      when :OUTBREAK_SPAWN_RATE then 200
+      when :OUTBREAK_RADIUS then 15
+      when :SHINY_PANIC_ENABLED then true
       else super
     end
   end
@@ -415,3 +457,439 @@ VOE_MOVE_COMMANDS = {
   script: 45,                # Ex: [:script, "echoln('test!')"]
   end: 0,
 }
+
+# ==============================================================================
+# OUTBREAK EVENT SYSTEM
+# ==============================================================================
+module VOEOutbreak
+  # Outbreak state
+  @active = false
+  @end_time = nil
+  @locked_species = nil  # For same-species outbreak
+  @map_id = nil
+  @shiny_mult = 1
+  @shiny_panic_end_time = nil
+  @next_trigger_time = nil # Time when the next outbreak can occur
+  
+  # UI sprites
+  @info_sprite = nil
+  @timer_sprite = nil
+  @timer_bg = nil
+  
+  class << self
+    attr_reader :active, :shiny_mult
+    
+    def locked_species(enc_type = nil)
+      return nil unless @locked_species
+      return @locked_species if @locked_species.is_a?(Symbol)
+      
+      category = :Land
+      if [:Water, :WaterDay, :WaterNight, :OldRod, :GoodRod, :SuperRod].include?(enc_type)
+        category = :Water
+      elsif [:Cave, :CaveDay, :CaveNight].include?(enc_type)
+        category = :Cave
+      end
+      return @locked_species[category] || @locked_species[:Land]
+    end
+    
+    def get_effective_shiny_rate
+      return 1 if shiny_panic_active?
+      return @shiny_mult if @active
+      return VOESettings::SHINY_RATE
+    end
+
+    def shiny_panic_active?
+      return false unless @shiny_panic_end_time
+      Time.now.to_f < @shiny_panic_end_time
+    end
+
+    def start_shiny_panic
+      return if shiny_panic_active?
+      @shiny_panic_end_time = Time.now.to_f + 60 # 1 minute
+      echoln "[VOE] SHINY PANIC STARTED!" if VOESettings::LOG_SPAWNS
+      pbSEPlay("Ice Beam", 100, 150) rescue nil
+      
+      # Turn all existing outbreak Pokemon on the map shiny immediately
+      if $game_map && $game_map.events
+        $game_map.events.each_value do |event|
+          next unless event.name&.include?("(Outbreak)")
+          next unless event.variable && event.variable[0].is_a?(Pokemon)
+          pkmn = event.variable[0]
+          next if pkmn.shiny?
+          
+          # Force shiny status
+          if pkmn.respond_to?(:makeShiny)
+            pkmn.makeShiny
+          else
+            pkmn.shiny = true
+          end
+          
+          # Update event name and sprite
+          if event.instance_variable_get(:@event)
+            event.instance_variable_get(:@event).name += " (Shiny)" unless event.name.include?("(Shiny)")
+          end
+          water = VOESettings::WATER_TILES.include?(pbGetTileID($game_map.map_id, event.x, event.y))
+          pbChangeEventSprite(event, pkmn, water)
+          pbVOESparkle(event) if $scene.respond_to?(:spriteset) && $scene.spriteset
+        end
+      end
+    end
+    
+    def active?
+      return false unless @active
+      return false if $game_map && @map_id != $game_map.map_id
+      true
+    end
+    
+    def time_remaining
+      return 0 unless @end_time
+      remaining = @end_time - Time.now.to_f
+      remaining > 0 ? remaining : 0
+    end
+    
+    def formatted_time
+      seconds = time_remaining.to_i
+      mins = seconds / 60
+      secs = seconds % 60
+      format("%d:%02d", mins, secs)
+    end
+    
+    def outbreak_type_text
+      VOESettings::OUTBREAK_TYPE == 0 ? "Mixed Species" : "Same Species"
+    end
+    
+    def shiny_text
+      "Shiny: #{@shiny_mult}x"
+    end
+    
+    # Start an outbreak on the current map
+    def start_outbreak(species = nil)
+      return unless VOESettings::OUTBREAK_ENABLED
+      return if active?
+      return unless $game_map
+      
+      # Blacklist Check
+      if VOESettings::BLACK_LIST_MAPS.include?($game_map.map_id) || $game_map.map_id < 2
+        echoln "[VOE] Cannot start outbreak on blacklisted map #{$game_map.map_id}" if VOESettings::LOG_SPAWNS
+        return
+      end
+      
+      @active = true
+      @map_id = $game_map.map_id
+      duration_minutes = VOESettings::OUTBREAK_DURATION
+      @end_time = Time.now.to_f + (duration_minutes * 60)
+      @shiny_mult = VOESettings::OUTBREAK_SHINY_MULT
+      @next_trigger_time = nil
+      
+      # Determine species if not provided
+      if species.nil?
+        species = get_random_species_from_any_map
+      end
+      
+      # Lock species if same-species mode
+      if VOESettings::OUTBREAK_TYPE == 1
+        @locked_species = {}
+        # If a specific species was provided (e.g. debug), use it as the Land rep
+        @locked_species[:Land] = species || get_random_species_from_any_map(:Land)
+        @locked_species[:Water] = get_random_species_from_any_map(:Water)
+        @locked_species[:Cave] = get_random_species_from_any_map(:Cave)
+        
+        # Ensure we have at least one valid species
+        @locked_species[:Land] ||= :PIDGEY
+      else
+        @locked_species = nil
+      end
+      
+      echoln "[VOE] OUTBREAK STARTED! Duration: #{duration_minutes}min, Type: #{outbreak_type_text}, Shiny: #{@shiny_mult}x" if VOESettings::LOG_SPAWNS
+      
+      # Play announcement sound
+      pbSEPlay("Choose", 80, 100) rescue nil
+      
+      # Show location window with outbreak message
+      if $scene.is_a?(Scene_Map) && defined?(LocationWindow)
+        $scene.spriteset.addUserSprite(LocationWindow.new(_INTL("Outbreak Started!"))) rescue nil
+      end
+      
+      # Create UI
+      create_ui
+      
+      # Spawn initial outbreak Pokemon
+      spawn_outbreak_pokemon
+    end
+    
+    def end_outbreak
+      return unless @active
+      
+      echoln "[VOE] Outbreak ended - cleaning up encounters" if VOESettings::LOG_SPAWNS
+      
+      # Cleanup encounters on the map
+      if $game_map && $game_map.events
+        # Use to_a to safely iterate while deleting
+        $game_map.events.values.each do |event|
+          next unless event.name[/OverworldPkmn/i]
+          
+          is_outbreak = event.name.include?("(Outbreak)")
+          if is_outbreak
+            echoln "[VOE] Destroying outbreak event: #{event.name} (ID: #{event.id})" if VOESettings::LOG_SPAWNS
+            if defined?(pbDestroyOverworldEncounter)
+              pbDestroyOverworldEncounter(event, true, true, true)
+            end
+          end
+        end
+      end
+      
+      @active = false
+      @end_time = nil
+      @locked_species = nil
+      @map_id = nil
+      @shiny_mult = 1
+      @shiny_panic_end_time = nil
+      
+      # Force a recount of encounters
+      VOESettings.current_encounters = nil
+      
+      dispose_ui
+    end
+    
+    def spawn_outbreak_pokemon
+      return unless active?
+      
+      count = VOESettings::OUTBREAK_SPAWN_COUNT
+      echoln "[VOE] Spawning #{count} outbreak Pokemon burst" if VOESettings::LOG_SPAWNS
+      
+      # Immediate burst spawn
+      count.times do
+        # We call the global generator. We use full_map=false to respect the player-radius logic.
+        if defined?(pbGenerateOverworldEncounters)
+          pbGenerateOverworldEncounters(false, false)
+        end
+      end
+    end
+    
+    # Get max encounters (override during outbreak)
+    def get_outbreak_max
+      active? ? VOESettings::OUTBREAK_MAX_OVERRIDE : VOESettings.get_max
+    end
+    
+
+    
+    # Block shiny despawn if setting is enabled
+    def block_shiny_despawn?
+      return false if shiny_panic_active? # During Panic, let them despawn to cycle spawns
+      active? && VOESettings::OUTBREAK_NO_SHINY_DESPAWN
+    end
+    
+    # Get current spawn rate
+    def spawn_rate_threshold
+      active? ? VOESettings::OUTBREAK_SPAWN_RATE : 600
+    end
+    
+    # Get a random species from ANY map encounter table
+    def get_random_species_from_any_map(preferred_type = nil)
+      return :PIDGEY unless $PokemonEncounters
+      
+      # Determine what types we're interested in
+      target_types = [:Land, :Water, :Cave, :Grass]
+      if preferred_type
+        # Map specific encounter types to general categories
+        if [:Water, :WaterDay, :WaterNight, :OldRod, :GoodRod, :SuperRod].include?(preferred_type)
+          target_types = [:Water, :OldRod, :GoodRod, :SuperRod]
+        elsif [:Cave, :CaveDay, :CaveNight].include?(preferred_type)
+          target_types = [:Cave]
+        else
+          target_types = [:Land, :Grass, :LandDay, :LandNight]
+        end
+      end
+      
+      if defined?(GameData::Encounter)
+        all_encounters = GameData::Encounter::DATA.values
+        if all_encounters && !all_encounters.empty?
+          # Try up to 20 times to find a valid encounter with species data matching the type
+          20.times do
+            enc_data = all_encounters.sample
+            if enc_data && enc_data.types && !enc_data.types.empty?
+              # Filter types that exist in this encounter data and match our target categories
+              available_target_types = enc_data.types.keys.select { |k| target_types.include?(k) }
+              
+              next if available_target_types.empty?
+              
+              random_type_key = available_target_types.sample
+              random_type = enc_data.types[random_type_key]
+              
+              if random_type && !random_type.empty?
+                species_data = random_type.sample
+                return species_data[1] if species_data
+              end
+            end
+          end
+        end
+      end
+      
+      # Fallback: Just return a random species from the current map
+      begin
+        # Use :Water if preferred_type implies it
+        fallback_type = :Land
+        if [:Water, :WaterDay, :WaterNight, :OldRod, :GoodRod, :SuperRod].include?(preferred_type)
+          fallback_type = :Water
+        elsif [:Cave, :CaveDay, :CaveNight].include?(preferred_type)
+          fallback_type = :Cave
+        end
+        
+        enc_type = $PokemonEncounters.find_valid_encounter_type_for_time(fallback_type, pbGetTimeNow)
+        pkmn_data = $PokemonEncounters.choose_wild_pokemon_for_map($game_map.map_id, enc_type)
+        return pkmn_data[0] if pkmn_data
+      rescue
+      end
+      
+      return :PIDGEY
+    end
+    
+    # ------------------
+    # UI METHODS
+    # ------------------
+    def create_ui
+      dispose_ui  # Clean up any existing UI
+      
+      return unless $scene.is_a?(Scene_Map)
+      
+      viewport = Viewport.new(0, 0, Graphics.width, Graphics.height)
+      viewport.z = 99999
+      
+      # Info bar (top-left): "Mixed Species | Shiny: 10x"
+      @info_sprite = Sprite.new(viewport)
+      @info_sprite.bitmap = Bitmap.new(220, 24)
+      @info_sprite.bitmap.font.name = "Power Green"
+      @info_sprite.bitmap.font.size = 18
+      @info_sprite.x = 8
+      @info_sprite.y = 4
+      @info_sprite.z = 99999
+      
+      # Timer box (top-right): "OUTBREAK 4:57"
+      @timer_bg = Sprite.new(viewport)
+      @timer_bg.bitmap = Bitmap.new(100, 40)
+      @timer_bg.bitmap.fill_rect(0, 0, 100, 40, Color.new(32, 32, 32, 200))
+      # Border
+      @timer_bg.bitmap.fill_rect(0, 0, 100, 2, Color.new(80, 80, 80))
+      @timer_bg.bitmap.fill_rect(0, 38, 100, 2, Color.new(80, 80, 80))
+      @timer_bg.bitmap.fill_rect(0, 0, 2, 40, Color.new(80, 80, 80))
+      @timer_bg.bitmap.fill_rect(98, 0, 2, 40, Color.new(80, 80, 80))
+      @timer_bg.x = Graphics.width - 108
+      @timer_bg.y = 4
+      @timer_bg.z = 99998
+      
+      @timer_sprite = Sprite.new(viewport)
+      @timer_sprite.bitmap = Bitmap.new(96, 36)
+      @timer_sprite.bitmap.font.name = "Power Green"
+      @timer_sprite.bitmap.font.size = 14
+      @timer_sprite.x = Graphics.width - 106
+      @timer_sprite.y = 6
+      @timer_sprite.z = 99999
+      
+      update_ui
+    end
+    
+    def update_ui
+      return unless active?
+      return unless @info_sprite && @timer_sprite
+      
+      # Update info bar
+      @info_sprite.bitmap.clear
+      info_text = "#{outbreak_type_text} | #{shiny_text}"
+      @info_sprite.bitmap.font.color = Color.new(255, 255, 255)
+      @info_sprite.bitmap.draw_text(0, 0, 220, 24, info_text)
+      
+      # Update timer
+      @timer_sprite.bitmap.clear
+      @timer_sprite.bitmap.font.color = Color.new(255, 200, 100)
+      @timer_sprite.bitmap.font.size = 12
+      @timer_sprite.bitmap.draw_text(0, 0, 96, 16, shiny_panic_active? ? "PANIC!" : "OUTBREAK", 1)
+      @timer_sprite.bitmap.font.size = 18
+      @timer_sprite.bitmap.font.color = shiny_panic_active? ? Color.new(255, 100, 255) : Color.new(255, 255, 255)
+      @timer_sprite.bitmap.draw_text(0, 14, 96, 22, shiny_panic_active? ? format(":%02d", (@shiny_panic_end_time - Time.now.to_f).to_i) : formatted_time, 1)
+    end
+    
+    def dispose_ui
+      if @info_sprite
+        @info_sprite.bitmap&.dispose
+        @info_sprite.dispose
+        @info_sprite = nil
+      end
+      if @timer_sprite
+        @timer_sprite.bitmap&.dispose
+        @timer_sprite.dispose
+        @timer_sprite = nil
+      end
+      if @timer_bg
+        @timer_bg.bitmap&.dispose
+        @timer_bg.dispose
+        @timer_bg = nil
+      end
+    end
+    
+    # Called every frame
+    def update
+      # Handle timer for next outbreak if none active globally
+      if !@active && VOESettings::OUTBREAK_ENABLED
+        @next_trigger_time = Time.now.to_f + (20 * 60) + rand(40 * 60) if @next_trigger_time.nil?
+        
+        # Check if it's time for a new outbreak
+        if Time.now.to_f >= @next_trigger_time
+          # Only trigger if map is valid (not blacklisted)
+          if $game_map && !VOESettings::BLACK_LIST_MAPS.include?($game_map.map_id) && $game_map.map_id >= 2
+            # Use global species variety for the outbreak species
+            global_species = get_random_species_from_any_map
+            start_outbreak(global_species) if global_species
+          else
+            # On invalid map, delay check by 1 minute
+            @next_trigger_time = Time.now.to_f + 60
+          end
+        end
+        return
+      end
+      
+      return unless @active
+      
+      # Check if outbreak should end (Time expired or Map left)
+      if (Time.now.to_f >= @end_time) || ($game_map && @map_id != $game_map.map_id)
+        end_outbreak
+        return
+      end
+
+      # Shiny Panic Trigger (1/8096 chance every second)
+      if VOESettings::SHINY_PANIC_ENABLED && !shiny_panic_active? && (Graphics.frame_count % Graphics.frame_rate == 0)
+        if rand(8096) == 0
+          start_shiny_panic
+        end
+      end
+      
+      # Only update UI if we are on the outbreak map
+      update_ui if active?
+    end
+  end
+end
+
+# Hook into Spriteset_Map update to update outbreak UI
+class Spriteset_Map
+  alias voe_outbreak_update update
+  def update
+    voe_outbreak_update
+    VOEOutbreak.update
+  end
+  
+  alias voe_outbreak_dispose dispose
+  def dispose
+    VOEOutbreak.dispose_ui
+    voe_outbreak_dispose
+  end
+end
+
+# Add pending_outbreak_spawns to Game_Temp
+class Game_Temp
+  attr_accessor :pending_outbreak_spawns
+  attr_accessor :outbreak_frame_counter
+  attr_accessor :map_location_window_text
+  attr_accessor :outbreak_debug_start_queued
+  attr_accessor :outbreak_debug_panic_queued
+  attr_accessor :outbreak_debug_end_queued
+end
+

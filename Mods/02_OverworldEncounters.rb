@@ -190,6 +190,149 @@ if defined?(ModSettingsMenu)
     :category => category
   })
 
+  # =====================
+  # OUTBREAK SETTINGS
+  # =====================
+  ModSettingsMenu.register(:voe_outbreak_enabled, {
+    :name => "Outbreak Events",
+    :type => :toggle,
+    :default => 1, # Enabled by default
+    :description => "Enable random outbreak events on maps.",
+    :category => category
+  })
+
+  ModSettingsMenu.register(:voe_outbreak_duration, {
+    :name => "Outbreak Duration",
+    :type => :enum,
+    :values => ["5 Minutes", "10 Minutes", "15 Minutes"],
+    :default => 1, # 10 minutes
+    :description => "How long outbreak events last.",
+    :category => category
+  })
+
+  ModSettingsMenu.register(:voe_outbreak_type, {
+    :name => "Outbreak Variety",
+    :type => :enum,
+    :values => ["Mixed Species", "Same Species"],
+    :default => 0, # Mixed
+    :description => "Pokemon variety during outbreaks.",
+    :category => category
+  })
+
+  ModSettingsMenu.register(:voe_outbreak_shiny_mult, {
+    :name => "Outbreak Shiny Rate",
+    :type => :slider,
+    :min => 1,
+    :max => 10,
+    :default => 1, # 1x (normal)
+    :description => "Shiny rate multiplier during outbreaks (1-10x).",
+    :category => category
+  })
+
+  ModSettingsMenu.register(:voe_outbreak_no_shiny_despawn, {
+    :name => "No Shiny Despawn (Outbreak)",
+    :type => :toggle,
+    :default => 1, # Enabled - shinies won't despawn
+    :description => "Prevent shiny despawn during outbreaks.",
+    :category => category
+  })
+
+  ModSettingsMenu.register(:voe_outbreak_spawn_count, {
+    :name => "Outbreak Initial Spawns",
+    :type => :slider,
+    :min => 3,
+    :max => 12,
+    :default => 6,
+    :description => "Pokemon spawned when outbreak starts.",
+    :category => category
+  })
+
+  ModSettingsMenu.register(:voe_outbreak_max_override, {
+    :name => "Outbreak Max Pokemon",
+    :type => :slider,
+    :min => 5,
+    :max => 20,
+    :default => 12,
+    :description => "Max encounters during an outbreak.",
+    :category => category
+  })
+
+  ModSettingsMenu.register(:voe_outbreak_spawn_rate, {
+    :name => "Outbreak Spawn Rate",
+    :type => :slider,
+    :min => 50,
+    :max => 500,
+    :default => 200,
+    :description => "Frames between spawns during outbreaks (Lower is faster).",
+    :category => category
+  })
+
+  ModSettingsMenu.register(:voe_outbreak_radius, {
+    :name => "Outbreak Radius",
+    :type => :slider,
+    :min => 5,
+    :max => 30,
+    :default => 15,
+    :description => "Radius around the player where outbreak Pokemon appear.",
+    :category => category
+  })
+
+  ModSettingsMenu.register(:voe_outbreak_shiny_panic, {
+    :name => "Outbreak Shiny Panic",
+    :type => :toggle,
+    :default => true,
+    :description => "1/8096 chance to turn all spawns Shiny for 1 minute during outbreaks.",
+    :category => category
+  })
+
+  ModSettingsMenu.register(:voe_outbreak_debug_start, {
+    :name => "[DEBUG] START EVENT",
+    :type => :button,
+    :on_press => proc {
+      $game_temp.outbreak_debug_start_queued = true
+      pbMessage(_INTL("Outbreak start queued for menu exit.")) if defined?(pbMessage)
+    },
+    :description => "Forces an outbreak to start when you exit the menu.",
+    :category => category
+  })
+
+  ModSettingsMenu.register(:voe_outbreak_debug_panic, {
+    :name => "[DEBUG] START PANIC",
+    :type => :button,
+    :on_press => proc {
+      $game_temp.outbreak_debug_panic_queued = true
+      pbMessage(_INTL("Panic Outbreak queued for menu exit.")) if defined?(pbMessage)
+    },
+    :description => "Forces a Shiny Panic outbreak to start when you exit the menu.",
+    :category => category
+  })
+
+  ModSettingsMenu.register(:voe_outbreak_shiny_panic_debug, {
+    :name => "[DEBUG] TRIGGER PANIC",
+    :type => :button,
+    :on_press => proc {
+      if defined?(VOEOutbreak) && VOEOutbreak.active?
+        VOEOutbreak.start_shiny_panic
+        pbMessage(_INTL("SHINY PANIC TRIGGERED!")) if defined?(pbMessage)
+      else
+        pbMessage(_INTL("Start an outbreak first!")) if defined?(pbMessage)
+      end
+    },
+    :description => "Forces a Shiny Panic event if an outbreak is active.",
+    :category => category
+  })
+
+  ModSettingsMenu.register(:voe_outbreak_debug_end, {
+    :name => "[DEBUG] END EVENT",
+    :type => :button,
+    :on_press => proc {
+      $game_temp.outbreak_debug_end_queued = true
+      pbMessage(_INTL("Outbreak end queued for menu exit.")) if defined?(pbMessage)
+    },
+    :description => "Forces the current outbreak to end when you exit the menu.",
+    :category => category
+  })
+
 else
   # ModSettingsMenu not defined
 end

@@ -1,15 +1,17 @@
 def pbGenerateOverworldEncounters(water = false, full_map = false)
   return false if $scene.is_a?(Scene_Intro) || $scene.is_a?(Scene_DebugIntro)
+  return false if !$game_map || VOESettings::BLACK_LIST_MAPS.include?($game_map.map_id) || $game_map.map_id < 2
   return false if !$PokemonEncounters
   return false if !$Trainer || $Trainer.able_pokemon_count == 0
   # return false if $PokemonGlobal.surfing
 
-  if VOESettings.current_encounters < VOESettings.get_max
+  max_limit = defined?(VOEOutbreak) ? VOEOutbreak.get_outbreak_max : VOESettings.get_max
+  if VOESettings.current_encounters < max_limit
     tile = get_grass_tile(full_map)
     
     # Check if valid tile was found BEFORE accessing its elements
     if tile.nil? || tile.empty?
-      echoln "[VOE] No valid spawn tile found (full_map=#{full_map}, current_encounters=#{VOESettings.current_encounters}, max=#{VOESettings.get_max})" if VOESettings::LOG_SPAWNS
+      echoln "[VOE] No valid spawn tile found (full_map=#{full_map}, current_encounters=#{VOESettings.current_encounters}, max=#{max_limit})" if VOESettings::LOG_SPAWNS
       return false
     end
     
@@ -43,19 +45,41 @@ def pbGenerateOverworldEncounters(water = false, full_map = false)
     
     # Check if this should be a fusion encounter
     if VOESettings::FUSION_ENCOUNTERS && rand(VOESettings::FUSION_RATE) == 0
-      # Get two random Pokemon from the encounter table
-      if VOESettings::DIFFERENT_ENCOUNTERS
-        pkmn1_data = pbChooseWildPokemonByVersion($game_map.map_id, enc_type, VOESettings::ENCOUNTER_TABLE)
-        pkmn2_data = pbChooseWildPokemonByVersion($game_map.map_id, enc_type, VOESettings::ENCOUNTER_TABLE)
+      # Get two random Pokemon
+      if defined?(VOEOutbreak) && VOEOutbreak.active?
+        # Outbreak Fusion Logic
+        if VOEOutbreak.locked_species
+          # Same-Species Outbreak: One part is the locked species, other is random (respecting terrain)
+          pkmn1_species = VOEOutbreak.locked_species
+          pkmn2_species = VOEOutbreak.get_random_species_from_any_map(enc_type)
+        else
+          # Mixed-Species Outbreak: Both parts are random from any map (respecting terrain)
+          pkmn1_species = VOEOutbreak.get_random_species_from_any_map(enc_type)
+          pkmn2_species = VOEOutbreak.get_random_species_from_any_map(enc_type)
+        end
+        # Level from current map
+        temp_data = $PokemonEncounters.choose_wild_pokemon_for_map($game_map.map_id, enc_type)
+        avg_level = temp_data ? temp_data[1] : 5
       else
-        pkmn1_data = $PokemonEncounters.choose_wild_pokemon_for_map($game_map.map_id, enc_type)
-        pkmn2_data = $PokemonEncounters.choose_wild_pokemon_for_map($game_map.map_id, enc_type)
+        # Normal map fusion logic
+        if VOESettings::DIFFERENT_ENCOUNTERS
+          pkmn1_data = pbChooseWildPokemonByVersion($game_map.map_id, enc_type, VOESettings::ENCOUNTER_TABLE)
+          pkmn2_data = pbChooseWildPokemonByVersion($game_map.map_id, enc_type, VOESettings::ENCOUNTER_TABLE)
+        else
+          pkmn1_data = $PokemonEncounters.choose_wild_pokemon_for_map($game_map.map_id, enc_type)
+          pkmn2_data = $PokemonEncounters.choose_wild_pokemon_for_map($game_map.map_id, enc_type)
+        end
+        if pkmn1_data && pkmn2_data
+          pkmn1_species = pkmn1_data[0]
+          pkmn2_species = pkmn2_data[0]
+          avg_level = ((pkmn1_data[1] + pkmn2_data[1]) / 2.0).round
+        end
       end
       
-      if pkmn1_data && pkmn2_data && pkmn1_data[0] != pkmn2_data[0]
+      if pkmn1_species && pkmn2_species && pkmn1_species != pkmn2_species
         # Body = pkmn1, Head = pkmn2 (head determines behavior/temperament)
-        fusion_body_species = pkmn1_data[0]
-        fusion_head_species = pkmn2_data[0]
+        fusion_body_species = pkmn1_species
+        fusion_head_species = pkmn2_species
         
         # Get dex numbers for fusion
         body_dex = getDexNumberForSpecies(fusion_body_species)
@@ -64,7 +88,6 @@ def pbGenerateOverworldEncounters(water = false, full_map = false)
         # Only create fusion if both are base Pokemon (not already fusions)
         if body_dex <= Settings::NB_POKEMON && head_dex <= Settings::NB_POKEMON
           fusion_species = getFusedPokemonIdFromDexNum(body_dex, head_dex)
-          avg_level = ((pkmn1_data[1] + pkmn2_data[1]) / 2.0).round
           pkmn = Pokemon.new(fusion_species, avg_level)
           is_fusion = true
           echoln "[generateOWEncounter] FUSION! Body: #{fusion_body_species}, Head: #{fusion_head_species}" if VOESettings::LOG_SPAWNS
@@ -74,12 +97,27 @@ def pbGenerateOverworldEncounters(water = false, full_map = false)
     
     # Regular encounter if not a fusion
     unless is_fusion
-      if VOESettings::DIFFERENT_ENCOUNTERS
-        pkmn_data = pbChooseWildPokemonByVersion($game_map.map_id, enc_type, VOESettings::ENCOUNTER_TABLE)
+      if defined?(VOEOutbreak) && VOEOutbreak.active?
+        if VOEOutbreak.locked_species(enc_type)
+          # Same-Species Outbreak
+          pkmn_species = VOEOutbreak.locked_species(enc_type)
+        else
+          # Mixed-Species Outbreak: Get random species from ANY map (respecting terrain)
+          pkmn_species = VOEOutbreak.get_random_species_from_any_map(enc_type)
+        end
+        # Determine level from current map's encounter table
+        temp_data = VOESettings::DIFFERENT_ENCOUNTERS ? 
+                    pbChooseWildPokemonByVersion($game_map.map_id, enc_type, VOESettings::ENCOUNTER_TABLE) :
+                    $PokemonEncounters.choose_wild_pokemon_for_map($game_map.map_id, enc_type)
+        pkmn = Pokemon.new(pkmn_species, temp_data ? temp_data[1] : 1)
       else
-        pkmn_data = $PokemonEncounters.choose_wild_pokemon_for_map($game_map.map_id, enc_type)
+        if VOESettings::DIFFERENT_ENCOUNTERS
+          pkmn_data = pbChooseWildPokemonByVersion($game_map.map_id, enc_type, VOESettings::ENCOUNTER_TABLE)
+        else
+          pkmn_data = $PokemonEncounters.choose_wild_pokemon_for_map($game_map.map_id, enc_type)
+        end
+        pkmn = Pokemon.new(pkmn_data[0], pkmn_data[1])
       end
-      pkmn = Pokemon.new(pkmn_data[0], pkmn_data[1])
     end
 
     echoln "[generateOWEncounter] Spawning #{pkmn.species} for #{enc_type}" if VOESettings::LOG_SPAWNS
@@ -101,8 +139,17 @@ def pbGenerateOverworldEncounters(water = false, full_map = false)
     pkmn.level = (pkmn.level + rand(-2..2)).clamp(2, GameData::GrowthRate.max_level)
     pkmn.calc_stats
     pkmn.reset_moves
-    pkmn.shiny = rand(VOESettings::SHINY_RATE) == 0  # rand(4) returns 0-3, so check for 0
-    echoln "[VOE] Shiny check: #{pkmn.shiny?} (rate: 1/#{VOESettings::SHINY_RATE})" if VOESettings::LOG_SPAWNS
+    shiny_rate = defined?(VOEOutbreak) ? VOEOutbreak.get_effective_shiny_rate : VOESettings::SHINY_RATE
+    if shiny_rate <= 1
+      if pkmn.respond_to?(:makeShiny)
+        pkmn.makeShiny
+      else
+        pkmn.shiny = true
+      end
+    else
+      pkmn.shiny = rand(shiny_rate) == 0
+    end
+    echoln "[VOE] Shiny check: #{pkmn.shiny?} (rate: 1/#{shiny_rate})" if VOESettings::LOG_SPAWNS
 
     echoln "#{pkmn.name} nature: #{pkmn.nature.id} (#{pkmn.nature.id.class.to_s})" if VOESettings::LOG_SPAWNS
 
@@ -115,6 +162,7 @@ def pbGenerateOverworldEncounters(water = false, full_map = false)
       e.name = e.name + " Reflection" if VOESettings::REFLECTION_MAP_IDS.include?($game_map.map_id)
       e.name = e.name + " (Shiny)" if pkmn.shiny?
       e.name = e.name + " (Fusion)" if is_fusion
+      e.name = e.name + " (Outbreak)" if defined?(VOEOutbreak) && VOEOutbreak.active?
 
       # Event position
       e.x = tile[0]
@@ -182,7 +230,7 @@ def pbGenerateOverworldEncounters(water = false, full_map = false)
     echoln "[VOE] Successfully spawned encounter. Total: #{VOESettings.current_encounters}" if VOESettings::LOG_SPAWNS
     return true
   else
-    echoln "[VOE] Max encounters reached (#{VOESettings.current_encounters}/#{VOESettings.get_max})" if VOESettings::LOG_SPAWNS
+    echoln "[VOE] Max encounters reached (#{VOESettings.current_encounters}/#{max_limit})" if VOESettings::LOG_SPAWNS
     return false
   end
 end
@@ -194,54 +242,41 @@ end
 # 1. On Enter Map (Legacy: onMapChange)
 Events.onMapChange += proc { |_sender, e|
   old_map_id = e[0]
+  # Reset counter immediately for the new map state
+  VOESettings.current_encounters = nil
+  
   # Always log map changes for debugging
   echoln "[VOE] onMapChange triggered: old_map_id=#{old_map_id}, new_map_id=#{$game_map.map_id}"
 
-  # Blacklist
-  if VOESettings::BLACK_LIST_MAPS.include?($game_map.map_id)
-    echoln "[VOE] Map #{$game_map.map_id} is blacklisted, skipping spawns"
-    next
-  end
-  if $game_map.map_id < 2
-    echoln "[VOE] Map ID #{$game_map.map_id} is < 2, skipping spawns"
-    next
-  end
-  # Try both $MapFactory and $map_factory (different versions use different names)
-  map_factory = defined?($MapFactory) ? $MapFactory : (defined?($map_factory) ? $map_factory : nil)
-  unless map_factory
-    echoln "[VOE] Map factory is nil in onMapChange, will try spawning in onMapSceneChange instead"
-    next
-  end
-  echoln "[VOE] Passed initial checks in onMapChange"
-
-  # Add Old Map to Variable
-  # In legacy onMapChange, $game_map is already the NEW map.
-  # We need to clean up events on the OLD map? 
-  # Wait, the logic gets the OLD map to clear encounters?
-  # "map = $map_factory.getMapNoAdd(old_map_id)"
-  # Yes, it cleans up previous map's encounters.
-  
+  # 1. Clean up Old Map encounters (if any)
   if old_map_id && old_map_id > 0
     map_factory = defined?($MapFactory) ? $MapFactory : (defined?($map_factory) ? $map_factory : nil)
     map = map_factory.getMapNoAdd(old_map_id) if map_factory
     if map
       map.events.each_value do |event|
-        next unless event.name[/OverworldPkmn/i]
-        # We can't easily destroy events on a map that isn't the current one via standard methods
-        # if they rely on the scene spriteset, but the data modifications are fine.
-        # pbDestroyOverworldEncounter checks $scene.spriteset which might form the NEW map.
-        # However, we allow it to try.
-        # Ideally we just reset the data.
-        VOESettings.current_encounters = 0 if VOESettings.current_encounters > 0
+        next unless event.name&.include?("OverworldPkmn")
+        VOESettings.current_encounters = 0 if VOESettings.current_encounters && VOESettings.current_encounters > 0
       end
     end
   end
   
-  # Reset counter
+  # 2. Reset counter for the new map
   VOESettings.current_encounters = 0
 
-  # Don't spawn here - let onMapSceneChange handle it with frame-based spawning
-  # This prevents freezing by spreading spawns across multiple frames
+  # 3. Blacklist - don't proceed with spawn logic if map is restricted
+  if VOESettings::BLACK_LIST_MAPS.include?($game_map.map_id) || $game_map.map_id < 2
+    echoln "[VOE] Map #{$game_map.map_id} is blacklisted or ID < 2, skipping spawn queueing"
+    next
+  end
+
+  # Try both $MapFactory and $map_factory
+  map_factory = defined?($MapFactory) ? $MapFactory : (defined?($map_factory) ? $map_factory : nil)
+  unless map_factory
+    echoln "[VOE] Map factory is nil in onMapChange, will try spawning in onMapSceneChange instead"
+    next
+  end
+  
+  echoln "[VOE] Passed initial checks in onMapChange"
 }
 
 # 2. On New Spriteset (Legacy: onSpritesetCreate)
@@ -270,7 +305,12 @@ Events.onMapSceneChange += proc { |_sender, e|
   scene = e[0]
   mapChanged = e[1]
   
-  # Only spawn on initial map load, not on scene regeneration
+  # 1. Persistent Features (Run every time map scene is ready)
+  if defined?(VOEOutbreak) && VOEOutbreak.active?
+    VOEOutbreak.create_ui
+  end
+
+  # 2. Initial Map Logic (Only run if map actually changed)
   next unless mapChanged
   
   echoln "[VOE] onMapSceneChange triggered (mapChanged=#{mapChanged}), checking for initial spawns"
@@ -302,9 +342,21 @@ Events.onMapSceneChange += proc { |_sender, e|
       
       # Record the visit time
       VOESettings.set_map_visit_time($game_map.map_id, Time.now.to_f)
+      
+      # -----------------------------------
+      # RANDOM OUTBREAK CHANCE ON ENTRY
+      # -----------------------------------
+      if defined?(VOEOutbreak) && VOESettings::OUTBREAK_ENABLED && !VOEOutbreak.active?
+        if rand(100) < 15 # 15% chance on map entry
+          # Pick a random global species for the outbreak
+          global_species = VOEOutbreak.get_random_species_from_any_map
+          VOEOutbreak.start_outbreak(global_species) if global_species
+        end
+      end
     elsif recently_visited
       echoln "[VOE] Skipping initial spawns - map was visited recently"
     end
+    
   rescue => err
     echoln "[VOE] Error in spawn on load (onMapSceneChange): #{err.class} - #{err.message}"
     echoln "[VOE] Backtrace: #{err.backtrace.join("\n")}"
@@ -320,6 +372,36 @@ Events.onMapUpdate += proc { |_sender, _e|
   next if VOESettings::DISABLE_SETTINGS || $PokemonSystem.owpkmnenabled == 1
   next if $game_temp.in_menu
   next if !$PokemonEncounters
+  
+  # Handle [DEBUG] START/END EVENT triggers
+  if defined?(VOEOutbreak)
+    # Start Panic Outbreak Queue
+    if $game_temp.outbreak_debug_panic_queued
+      $game_temp.outbreak_debug_panic_queued = false
+      unless VOEOutbreak.active?
+        global_species = VOEOutbreak.get_random_species_from_any_map
+        if global_species
+          VOEOutbreak.start_outbreak(global_species)
+          VOEOutbreak.start_shiny_panic
+        end
+      end
+    end
+
+    # Start Outbreak Queue
+    if $game_temp.outbreak_debug_start_queued
+      $game_temp.outbreak_debug_start_queued = false
+      unless VOEOutbreak.active?
+        global_species = VOEOutbreak.get_random_species_from_any_map
+        VOEOutbreak.start_outbreak(global_species) if global_species
+      end
+    end
+    
+    # End Outbreak Queue
+    if $game_temp.outbreak_debug_end_queued
+      $game_temp.outbreak_debug_end_queued = false
+      VOEOutbreak.end_outbreak if VOEOutbreak.active?
+    end
+  end
   
   # Handle pending initial spawns (spawn one every many frames to prevent freezing)
   if $game_temp.pending_initial_spawns && $game_temp.pending_initial_spawns > 0
@@ -361,7 +443,8 @@ Events.onMapUpdate += proc { |_sender, _e|
   end
   
   $game_temp.frames_updated += 1
-  next if $game_temp.frames_updated < 600 # <<< Updated Frame Rate
+  spawn_threshold = defined?(VOEOutbreak) ? VOEOutbreak.spawn_rate_threshold : 600
+  next if $game_temp.frames_updated < spawn_threshold
   $game_temp.frames_updated = 0
   
   $game_map.events.each_value do |event|

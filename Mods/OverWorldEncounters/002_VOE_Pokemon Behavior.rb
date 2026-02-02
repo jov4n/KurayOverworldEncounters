@@ -119,6 +119,9 @@ def get_grass_tile(full_map = false)
   else
     # Original behavior: search near player
     possible_distance = (VOESettings::MAX_DISTANCE * 0.75).round
+    if defined?(VOEOutbreak) && VOEOutbreak.active?
+      possible_distance = VOESettings::OUTBREAK_RADIUS
+    end
     (($game_player.x - possible_distance)..($game_player.x + possible_distance)).each do |x|
       # Don't check if out of bounds
       next if x < 0 || x >= $game_map.width
@@ -171,12 +174,16 @@ def get_grass_tile(full_map = false)
   return (possible_tiles.empty? ? [] : possible_tiles.sample)
 end
 
-def pbDestroyOverworldEncounter(event, animation = true, play_sound = false)
+def pbDestroyOverworldEncounter(event, animation = true, play_sound = false, force = false)
   return if $scene.is_a?(Scene_Intro) || $scene.is_a?(Scene_DebugIntro)
   return if event.nil?
   return if event.variable.nil?
-  unless $game_variables[1] == 1 || $game_variables[1] == 4
-    return if event.variable[0].shiny? && VOESettings::DELETE_SHINY == false
+  unless force || $game_variables[1] == 1 || $game_variables[1] == 4
+    # Block shiny despawn if setting is enabled OR during outbreak with no-despawn
+    if event.variable[0].shiny?
+      return if VOESettings::DELETE_SHINY == false
+      return if defined?(VOEOutbreak) && VOEOutbreak.block_shiny_despawn?
+    end
   end
   echoln "Despawning #{event.variable[0].name}" if VOESettings::LOG_SPAWNS
   if play_sound
