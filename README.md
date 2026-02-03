@@ -37,6 +37,5 @@ All features can be customized through the Mod Settings menu under the "Encounte
 
 ## Requirements
 
-- Pokemon Essentials v21.1
 - Mod Settings
 - Kuray's Infinite Fusion (for fusion encounters)

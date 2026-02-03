@@ -4,7 +4,7 @@ def pbInteractOverworldEncounter
   evt = pbMapInterpreter.get_self
   evt.lock
   pkmn = evt.variable[0]
-  return pbDestroyOverworldEncounter(evt) if pkmn.nil?
+  return pbDestroyOverworldEncounter(evt, false, false, true) if pkmn.nil?
   
   # Check for nearby encounters for horde battle (2v1)
   nearby_encounter = nil
@@ -12,9 +12,11 @@ def pbInteractOverworldEncounter
   
   if VOESettings::HORDE_BATTLES  # 2v1 even with just 1 Pokemon!
     horde_dist = VOESettings::HORDE_DISTANCE
-    $game_map.events.each_value do |event|
+    # Use .to_a to safely iterate (prevents issues if events are modified)
+    $game_map.events.values.to_a.each do |event|
+      next if event.nil?  # Safety check
       next if event.id == evt.id  # Skip self
-      next unless event.name[/OverworldPkmn/i]
+      next unless event.name[/OverworldPkmn/i] rescue next
       next if event.variable.nil?
       next if event.variable[0].nil?
       
@@ -43,16 +45,21 @@ def pbInteractOverworldEncounter
     pbMessage(_INTL("{1}{2} and {3} appeared together!", textcol, name, name2))
     setBattleRule("double")
     decision = pbWildBattleCore(pkmn, nearby_encounter)
-    # Destroy both encounters
-    pbDestroyOverworldEncounter(nearby_event, decision == 4, decision != 4)
+    # FORCE destroy BOTH encounters after ANY battle outcome (catch, defeat, or run)
+    # We no longer allow shiny protection after a battle - the encounter is consumed
+    echoln "[VOE] Horde battle ended with decision #{decision}, force-destroying both events" if VOESettings::LOG_SPAWNS
+    pbDestroyOverworldEncounter(nearby_event, decision == 4, false, true) # force=true
+    pbDestroyOverworldEncounter(evt, decision == 4, decision != 4, true) # force=true
   else
     # Single battle
     pbMessage(_INTL("{1}{2}!", textcol, name[0, name_half] + name[name_half] + name[name_half]))
     decision = pbWildBattleCore(pkmn)
+    # FORCE destroy after ANY battle outcome
+    echoln "[VOE] Battle ended with decision #{decision}, force-destroying event" if VOESettings::LOG_SPAWNS
+    pbDestroyOverworldEncounter(evt, decision == 4, decision != 4, true) # force=true
   end
   
   $game_temp.overworld_encounter = false
-  pbDestroyOverworldEncounter(evt, decision == 4, decision != 4)
 end
 
 def pbTrainersSeePkmn(evt)
@@ -74,41 +81,50 @@ def get_grass_tile(full_map = false)
   possible_tiles = []
   
   if full_map
-    # Search the entire map for initial spawns, but sample randomly to reduce cost
-    # Instead of checking every tile, sample a subset
-    sample_rate = 4  # Check every 4th tile to reduce computation
-    checked = 0
-    max_checks = 500  # Limit total checks to prevent freezing
+    # Search the entire map for initial spawns using random sampling
+    max_attempts = 800  # More attempts for better coverage
+    terrain_tiles = []  # Tiles with proper terrain tags
+    passable_tiles = [] # Fallback: any passable tile
     
-    (0...$game_map.width).step(sample_rate) do |x|
-      (0...$game_map.height).step(sample_rate) do |y|
-        checked += 1
-        break if checked >= max_checks  # Safety limit
-        
-        # Don't check if on top of the player (only skip player position, not nearby)
-        next if x == $game_player.x && y == $game_player.y
-        # Don't spawn on impassable tiles
-        next if !$game_map.passable?(x, y, 0) unless VOESettings::WATER_TILES.include?($game_map.terrain_tag(x, y).id)
-        # Don't spawn if on top of an event (quick check)
-        next if $game_map.event_at_position(x, y) rescue false
-
-        # Returning by Tile Ids
-        terrain_id = $game_map.terrain_tag(x, y).id rescue :None
-        next if terrain_id == :Rock
-
-        # Spawn only if on an encounter tile
-        next unless
-          VOESettings::GRASS_TILES.include?(terrain_id) ||
-          VOESettings::WATER_TILES.include?(terrain_id) ||
-          $PokemonEncounters.has_cave_encounters?
-
-        # Add to possible tiles
-        possible_tiles.push([x, y])
+    max_attempts.times do
+      # Random coordinates across the map
+      x = rand($game_map.width)
+      y = rand($game_map.height)
+      
+      # Skip player position
+      next if x == $game_player.x && y == $game_player.y
+      
+      # Check terrain tag
+      terrain_id = $game_map.terrain_tag(x, y).id rescue :None
+      next if terrain_id == :Rock
+      
+      # Check passability
+      is_water = VOESettings::WATER_TILES.include?(terrain_id)
+      next if !$game_map.passable?(x, y, 0) && !is_water
+      
+      # Skip if an event is there
+      has_event = ($game_map.event_at_position(x, y) rescue false)
+      next if has_event
+      
+      # Check if this is a proper encounter tile
+      is_terrain_tile = VOESettings::GRASS_TILES.include?(terrain_id) ||
+                        VOESettings::WATER_TILES.include?(terrain_id) ||
+                        $PokemonEncounters.has_cave_encounters?
+      
+      if is_terrain_tile
+        terrain_tiles.push([x, y])
+      else
+        passable_tiles.push([x, y])
       end
-      break if checked >= max_checks
+      
+      # Stop early if we have enough terrain tiles
+      break if terrain_tiles.length >= 50
     end
     
-    # Filter water tiles if needed (do this once at the end instead of during loop)
+    # Prefer terrain tiles, but use passable tiles as fallback for cave maps
+    possible_tiles = terrain_tiles.any? ? terrain_tiles : passable_tiles
+    
+    # Filter water tiles if needed
     if VOESettings::WATER_SPAWNS_ONLY_SURFING && !$PokemonGlobal.surfing
       possible_tiles.delete_if { |tile| VOESettings::WATER_TILES.include?($game_map.terrain_tag(tile[0], tile[1]).id) }
     end
@@ -177,44 +193,79 @@ end
 def pbDestroyOverworldEncounter(event, animation = true, play_sound = false, force = false)
   return if $scene.is_a?(Scene_Intro) || $scene.is_a?(Scene_DebugIntro)
   return if event.nil?
-  return if event.variable.nil?
-  unless force || $game_variables[1] == 1 || $game_variables[1] == 4
-    # Block shiny despawn if setting is enabled OR during outbreak with no-despawn
-    if event.variable[0].shiny?
-      return if VOESettings::DELETE_SHINY == false
-      return if defined?(VOEOutbreak) && VOEOutbreak.block_shiny_despawn?
+  
+  # Get pokemon data before we potentially clear it
+  pkmn = event.variable.is_a?(Array) ? event.variable[0] : nil
+  pkmn_name = pkmn ? pkmn.name : "Unknown"
+  is_shiny = pkmn ? pkmn.shiny? : false
+  
+  # If variable is nil, skip the shiny check but still cleanup the event shell
+  if event.variable.nil?
+    echoln "[VOE] Destroying event with nil variable (ghost cleanup)" if VOESettings::LOG_SPAWNS
+    # Fall through to cleanup
+  elsif !force
+    # Only apply shiny protection for NON-FORCE (natural despawn) calls
+    # Battle outcomes ALWAYS use force=true, so shiny protection won't apply
+    unless $game_variables[1] == 1 || $game_variables[1] == 4
+      if is_shiny
+        if VOESettings::DELETE_SHINY == false
+          echoln "[VOE] Blocking despawn of shiny #{pkmn_name} (DELETE_SHINY=false)" if VOESettings::LOG_SPAWNS
+          return
+        end
+        if defined?(VOEOutbreak) && VOEOutbreak.block_shiny_despawn?
+          echoln "[VOE] Blocking despawn of shiny #{pkmn_name} (Outbreak shiny protection)" if VOESettings::LOG_SPAWNS
+          return
+        end
+      end
     end
   end
-  echoln "Despawning #{event.variable[0].name}" if VOESettings::LOG_SPAWNS
-  if play_sound
-    dist = (((event.x - $game_player.x).abs + (event.y - $game_player.y).abs) / 4).floor
-    pbSEPlay(VOESettings::FLEE_SOUND, [75, 65, 55, 40, 27, 22, 15][dist], 150) if dist <= 6 && dist >= 0 unless dist.nil?
-  end
-  spriteset = $scene.spriteset
-  spriteset&.addUserAnimation(VOESettings::SPAWN_ANIMATION, event.x, event.y, true, 1) if animation
   
-  # ALWAYS fully delete the event to prevent invisible walls
+  echoln "[VOE] Despawning #{pkmn_name} (force=#{force}, shiny=#{is_shiny})" if VOESettings::LOG_SPAWNS
+  
+  if play_sound && pkmn
+    dist = (((event.x - $game_player.x).abs + (event.y - $game_player.y).abs) / 4).floor
+    pbSEPlay(VOESettings::FLEE_SOUND, [75, 65, 55, 40, 27, 22, 15][dist], 150) if dist && dist <= 6 && dist >= 0
+  end
+  
+  spriteset = $scene.respond_to?(:spriteset) ? $scene.spriteset : nil
+  spriteset&.addUserAnimation(VOESettings::SPAWN_ANIMATION, event.x, event.y, true, 1) if animation && spriteset
+  
+  # Store event ID before cleanup
+  event_id = event.id
+  rf_data = event.variable.is_a?(Array) ? event.variable[1] : nil
+  
+  # IMMEDIATELY make the event non-interactive to prevent race conditions
+  begin
+    event.setVariable(nil) rescue nil
+    event.through = true rescue nil
+    event.character_name = "" rescue nil
+    # Mark as erased to prevent any further processing
+    event.instance_variable_set(:@erased, true) rescue nil
+  rescue => e
+    echoln "[VOE] Error clearing event data: #{e.message}" if VOESettings::LOG_SPAWNS
+  end
+  
+  # Now fully delete the event
   begin
     # First clear the sprite
     spriteset&.delete_character(event)
     
-    # Remove from map events
-    $game_map.events.delete(event.id) if $game_map&.events
+    # Remove from map events hash using stored ID
+    $game_map.events.delete(event_id) if $game_map&.events
     
     # Also try the Rf method if available
-    if event.variable && event.variable[1]
-      Rf.delete_event(event.variable[1]) rescue nil
-    end
+    Rf.delete_event(rf_data) rescue nil if rf_data
   rescue => e
-    echoln "[VOE] Error deleting event: #{e.message}" if VOESettings::LOG_SPAWNS
+    echoln "[VOE] Error deleting event #{event_id}: #{e.message}" if VOESettings::LOG_SPAWNS
   end
   
-  # Clear event data to prevent re-interaction
-  event.setVariable(nil) rescue nil
-  event.through = true rescue nil
-  event.character_name = "" rescue nil
-  
-  VOESettings.current_encounters -= 1
+  # Only decrement counter if we had a valid pokemon
+  # Also ensure counter never goes below 0
+  if pkmn
+    VOESettings.current_encounters -= 1
+    VOESettings.current_encounters = 0 if VOESettings.current_encounters < 0
+    echoln "[VOE] Encounter count now: #{VOESettings.current_encounters}" if VOESettings::LOG_SPAWNS
+  end
   $game_variables[1] = 0
 end
 

@@ -5,7 +5,30 @@
 # otherwise Overworld Encounters can trigger Roaming Battles
 
 class VOESettings
-  BLACK_LIST_MAPS = [61, 62, 63, 64, 65, 66]
+  BLACK_LIST_MAPS = [1, 2, 3, 4, 5, 19, 20, 21, 22, 23, 24, 25, 37, 42, 43, 44, 48, 49, 50,
+60, 61, 62, 63, 64, 65, 67, 68, 69, 70, 71, 73, 76, 77, 79, 80, 81,
+83, 84, 85, 87, 91, 93, 95, 98, 100, 108, 109, 110, 111, 119, 120,
+121, 122, 125, 130, 131, 134, 135, 136, 137, 138, 141, 149, 152,
+153, 156, 167, 168, 169, 170, 173, 174, 176, 177, 180, 181, 182,
+183, 184, 187, 188, 189, 190, 191, 194, 196, 199, 200, 204, 205,
+206, 207, 208, 209, 212, 215, 219, 221, 226, 230, 237, 239, 241,
+242, 243, 244, 245, 246, 247, 249, 250, 251, 257, 264, 268, 269,
+270, 272, 273, 274, 275, 278, 280, 281, 282, 289, 292, 293, 294,
+296, 297, 298, 305, 309, 310, 325, 326, 327, 329, 330, 331, 332,
+334, 337, 338, 357, 359, 360, 363, 366, 367, 368, 370, 371, 377,
+379, 380, 386, 387, 388, 389, 391, 392, 393, 394, 395, 405, 408,
+414, 416, 419, 420, 421, 426, 430, 447, 448, 450, 451, 452, 453,
+454, 458, 459, 460, 461, 462, 463, 464, 465, 466, 470, 472, 476,
+477, 478, 479, 481, 482, 498, 499, 500, 501, 502, 503, 504, 510,
+514, 519, 520, 521, 524, 530, 532, 541, 551, 552, 553, 567, 568,
+571, 572, 574, 575, 576, 577, 579, 582, 583, 584, 611, 613, 621,
+622, 623, 625, 631, 632, 643, 644, 647, 648, 649, 650, 651, 652,
+653, 660, 661, 662, 663, 665, 666, 667, 668, 671, 672, 673, 674,
+675, 676, 677, 696, 697, 701, 702, 703, 704, 709, 710, 711, 712,
+713, 714, 716, 720, 721, 722, 723, 730, 734, 735, 736, 737, 738,
+740, 744, 745, 747, 757, 758, 770, 771, 772, 786, 787, 789, 795,
+807, 810, 811, 812, 813, 814, 815, 816, 820, 833, 834, 838, 839,
+840, 841, 842, 843, 844, 845, 846, 847, 848, 849]
   BLACK_LIST_WATER = [96]
   REFLECTION_MAP_IDS = [70, 103, 105]
 
@@ -122,7 +145,7 @@ class VOESettings
           return val if val != nil && val.is_a?(Numeric)
         when :SHINY_PANIC_ENABLED
           val = ModSettingsMenu.get(:voe_outbreak_shiny_panic)
-          return val if val != nil
+          return (val == 1) if val != nil
         end
       end
     rescue => e
@@ -470,6 +493,7 @@ module VOEOutbreak
   @shiny_mult = 1
   @shiny_panic_end_time = nil
   @next_trigger_time = nil # Time when the next outbreak can occur
+  @panic_cleanup_done = false  # Track if shiny panic cleanup already ran
   
   # UI sprites
   @info_sprite = nil
@@ -539,6 +563,49 @@ module VOEOutbreak
       return false unless @active
       return false if $game_map && @map_id != $game_map.map_id
       true
+    end
+    
+    def cooldown_passed?
+      return true if @next_trigger_time.nil?  # No cooldown set, allow outbreak
+      Time.now.to_f >= @next_trigger_time
+    end
+    
+    # Queue an outbreak to start after a delay (in seconds)
+    def queue_delayed_outbreak(delay_seconds)
+      @delayed_outbreak_time = Time.now.to_f + delay_seconds
+      @delayed_outbreak_map_id = $game_map.map_id  # Remember which map triggered it
+    end
+    
+    # Check if a delayed outbreak is ready to trigger
+    def check_delayed_outbreak
+      return unless @delayed_outbreak_time
+      return if @active  # Don't trigger if already active
+      
+      # Cancel if player left the map that triggered the outbreak
+      if $game_map.nil? || $game_map.map_id != @delayed_outbreak_map_id
+        echoln "[VOE] Delayed outbreak cancelled - player left map" if VOESettings::LOG_SPAWNS
+        @delayed_outbreak_time = nil
+        @delayed_outbreak_map_id = nil
+        return
+      end
+      
+      # Cancel if now on blacklisted map
+      if VOESettings::BLACK_LIST_MAPS.include?($game_map.map_id) || $game_map.map_id < 2
+        echoln "[VOE] Delayed outbreak cancelled - blacklisted map" if VOESettings::LOG_SPAWNS
+        @delayed_outbreak_time = nil
+        @delayed_outbreak_map_id = nil
+        return
+      end
+      
+      # Check if it's time to trigger
+      if Time.now.to_f >= @delayed_outbreak_time
+        echoln "[VOE] Delayed outbreak triggering now!" if VOESettings::LOG_SPAWNS
+        @delayed_outbreak_time = nil
+        @delayed_outbreak_map_id = nil
+        
+        global_species = get_random_species_from_any_map
+        start_outbreak(global_species) if global_species
+      end
     end
     
     def time_remaining
@@ -620,22 +687,56 @@ module VOEOutbreak
     def end_outbreak
       return unless @active
       
-      echoln "[VOE] Outbreak ended - cleaning up encounters" if VOESettings::LOG_SPAWNS
+      echoln "[VOE] Outbreak ended" if VOESettings::LOG_SPAWNS
       
-      # Cleanup encounters on the map
-      if $game_map && $game_map.events
-        # Use to_a to safely iterate while deleting
-        $game_map.events.values.each do |event|
-          next unless event.name[/OverworldPkmn/i]
+      # Try to cleanup events from the ORIGINAL outbreak map (stored in @map_id)
+      # This works even if we're now on a different/blacklisted map
+      cleanup_map = nil
+      cleanup_map_id = @map_id  # The map where the outbreak started
+      
+      if cleanup_map_id && cleanup_map_id > 0
+        # If we're still on the outbreak map, use $game_map directly
+        if $game_map && $game_map.map_id == cleanup_map_id
+          cleanup_map = $game_map
+        else
+          # Try to get the old map from map factory
+          begin
+            map_factory = defined?($MapFactory) ? $MapFactory : (defined?($map_factory) ? $map_factory : nil)
+            if map_factory
+              cleanup_map = map_factory.getMapNoAdd(cleanup_map_id) rescue nil
+            end
+          rescue => e
+            echoln "[VOE] Could not access old map #{cleanup_map_id}: #{e.message}" if VOESettings::LOG_SPAWNS
+          end
+        end
+      end
+      
+      # Cleanup events from the outbreak map
+      if cleanup_map && cleanup_map.events
+        echoln "[VOE] Cleaning up outbreak encounters on map #{cleanup_map_id}" if VOESettings::LOG_SPAWNS
+        # Use .to_a to safely iterate while deleting
+        cleanup_map.events.values.to_a.each do |event|
+          next if event.nil?
+          next unless event.name[/OverworldPkmn/i] rescue next
           
-          is_outbreak = event.name.include?("(Outbreak)")
+          is_outbreak = event.name.include?("(Outbreak)") rescue false
           if is_outbreak
             echoln "[VOE] Destroying outbreak event: #{event.name} (ID: #{event.id})" if VOESettings::LOG_SPAWNS
             if defined?(pbDestroyOverworldEncounter)
               pbDestroyOverworldEncounter(event, true, true, true)
+            else
+              # Manual cleanup if function not available
+              begin
+                event.character_name = ""
+                event.through = true
+                cleanup_map.events.delete(event.id)
+              rescue
+              end
             end
           end
         end
+      else
+        echoln "[VOE] Could not access outbreak map #{cleanup_map_id} for cleanup" if VOESettings::LOG_SPAWNS
       end
       
       @active = false
@@ -644,6 +745,11 @@ module VOEOutbreak
       @map_id = nil
       @shiny_mult = 1
       @shiny_panic_end_time = nil
+      @panic_cleanup_done = false
+      
+      # Set cooldown timer for next outbreak (20-60 minutes from now)
+      @next_trigger_time = Time.now.to_f + (20 * 60) + rand(40 * 60)
+      echoln "[VOE] Next outbreak possible in #{((@next_trigger_time - Time.now.to_f) / 60).round(1)} minutes" if VOESettings::LOG_SPAWNS
       
       # Force a recount of encounters
       VOESettings.current_encounters = nil
@@ -688,14 +794,17 @@ module VOEOutbreak
     def get_random_species_from_any_map(preferred_type = nil)
       return :PIDGEY unless $PokemonEncounters
       
-      # Determine what types we're interested in
-      target_types = [:Land, :Water, :Cave, :Grass]
+      # STRICT: Default to Land types only (not all types)
+      target_types = [:Land, :Grass, :LandDay, :LandNight]
+      is_water_spawn = false
+      
       if preferred_type
         # Map specific encounter types to general categories
         if [:Water, :WaterDay, :WaterNight, :OldRod, :GoodRod, :SuperRod].include?(preferred_type)
-          target_types = [:Water, :OldRod, :GoodRod, :SuperRod]
+          target_types = [:Water, :WaterDay, :WaterNight, :OldRod, :GoodRod, :SuperRod]
+          is_water_spawn = true
         elsif [:Cave, :CaveDay, :CaveNight].include?(preferred_type)
-          target_types = [:Cave]
+          target_types = [:Cave, :CaveDay, :CaveNight]
         else
           target_types = [:Land, :Grass, :LandDay, :LandNight]
         end
@@ -704,30 +813,52 @@ module VOEOutbreak
       if defined?(GameData::Encounter)
         all_encounters = GameData::Encounter::DATA.values
         if all_encounters && !all_encounters.empty?
-          # Try up to 20 times to find a valid encounter with species data matching the type
-          20.times do
+          # Try up to 50 times to find a valid species
+          50.times do
             enc_data = all_encounters.sample
-            if enc_data && enc_data.types && !enc_data.types.empty?
-              # Filter types that exist in this encounter data and match our target categories
-              available_target_types = enc_data.types.keys.select { |k| target_types.include?(k) }
-              
-              next if available_target_types.empty?
-              
-              random_type_key = available_target_types.sample
-              random_type = enc_data.types[random_type_key]
-              
-              if random_type && !random_type.empty?
-                species_data = random_type.sample
-                return species_data[1] if species_data
+            next unless enc_data && enc_data.types && !enc_data.types.empty?
+            
+            # Filter types that match our target categories
+            available_target_types = enc_data.types.keys.select { |k| target_types.include?(k) }
+            next if available_target_types.empty?
+            
+            random_type_key = available_target_types.sample
+            random_type = enc_data.types[random_type_key]
+            next unless random_type && !random_type.empty?
+            
+            species_entry = random_type.sample
+            next unless species_entry
+            
+            # Get species (index 1 in encounter data)
+            candidate = species_entry[1] rescue species_entry[0]
+            next unless candidate
+            
+            # SECONDARY CHECK: Reject pure Water types for land spawns
+            unless is_water_spawn
+              begin
+                sp_data = GameData::Species.try_get(candidate)
+                if sp_data
+                  types = [sp_data.types].flatten.compact
+                  # Pure Water type check
+                  if types.include?(:WATER)
+                    other_types = types - [:WATER]
+                    # Allow Water/Flying, Water/Ground etc. but not pure Water
+                    if other_types.empty? || other_types == [:ICE]
+                      next  # Skip pure water types
+                    end
+                  end
+                end
+              rescue
               end
             end
+            
+            return candidate
           end
         end
       end
       
-      # Fallback: Just return a random species from the current map
+      # Fallback: Use current map's encounter table
       begin
-        # Use :Water if preferred_type implies it
         fallback_type = :Land
         if [:Water, :WaterDay, :WaterNight, :OldRod, :GoodRod, :SuperRod].include?(preferred_type)
           fallback_type = :Water
@@ -828,6 +959,9 @@ module VOEOutbreak
     
     # Called every frame
     def update
+      # Check for delayed outbreak trigger (5 second delay after map entry)
+      check_delayed_outbreak
+      
       # Handle timer for next outbreak if none active globally
       if !@active && VOESettings::OUTBREAK_ENABLED
         @next_trigger_time = Time.now.to_f + (20 * 60) + rand(40 * 60) if @next_trigger_time.nil?
@@ -849,6 +983,13 @@ module VOEOutbreak
       
       return unless @active
       
+      # If on blacklisted map, end the outbreak immediately
+      if $game_map && (VOESettings::BLACK_LIST_MAPS.include?($game_map.map_id) || $game_map.map_id < 2)
+        echoln "[VOE] Entered blacklisted map - ending outbreak" if VOESettings::LOG_SPAWNS
+        end_outbreak
+        return
+      end
+      
       # Check if outbreak should end (Time expired or Map left)
       if (Time.now.to_f >= @end_time) || ($game_map && @map_id != $game_map.map_id)
         end_outbreak
@@ -857,7 +998,25 @@ module VOEOutbreak
 
       # Shiny Panic Trigger (1/8096 chance every second)
       if VOESettings::SHINY_PANIC_ENABLED && !shiny_panic_active? && (Graphics.frame_count % Graphics.frame_rate == 0)
-        if rand(8096) == 0
+        # Check if we just exited panic (cleanup needed)
+        if @shiny_panic_end_time && Time.now.to_f >= @shiny_panic_end_time && !@panic_cleanup_done
+          echoln "[VOE] Shiny Panic ENDED - cleaning up panic shinies" if VOESettings::LOG_SPAWNS
+          @panic_cleanup_done = true
+          
+          # Cleanup all shinies that were made shiny during panic (they have both Outbreak and Shiny tags)
+          # Only clean if DELETE_SHINY is enabled, otherwise let them stay
+          if VOESettings::DELETE_SHINY && $game_map && $game_map.events
+            $game_map.events.values.to_a.each do |event|
+              next if event.nil?
+              next unless (event.name.include?("(Outbreak)") && event.name.include?("(Shiny)")) rescue false
+              echoln "[VOE] Despawning panic shiny: #{event.name}" if VOESettings::LOG_SPAWNS
+              pbDestroyOverworldEncounter(event, true, false, true) rescue nil
+            end
+          end
+          
+          @shiny_panic_end_time = nil
+        elsif rand(8096) == 0
+          @panic_cleanup_done = false  # Reset cleanup flag for next panic
           start_shiny_panic
         end
       end

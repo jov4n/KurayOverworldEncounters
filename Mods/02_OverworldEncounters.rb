@@ -333,17 +333,36 @@ if defined?(ModSettingsMenu)
     :category => category
   })
 
+  # =====================
+  # VERSION INFO
+  # =====================
+  ModSettingsMenu.register(:voe_version_info, {
+    :name => "[INFO] Version Info",
+    :type => :button,
+    :on_press => proc {
+      if defined?(VOEVersion)
+        VOEVersion.show_version_dialog
+      else
+        pbMessage(_INTL("Version: Unknown\n\nRun VOE_Updater.bat to update.")) if defined?(pbMessage)
+      end
+    },
+    :description => "Show version info. Run VOE_Updater.bat to check for updates.",
+    :category => category
+  })
+
 else
   # ModSettingsMenu not defined
 end
 
 # 3. Load VOE Scripts
-# Order matters: Config -> Behavior -> Event Handlers -> Movement
+# Order matters: Config -> Behavior -> Event Handlers -> Movement -> Version
 voe_scripts = [
   "Mods/OverWorldEncounters/001_VOE_Config.rb",
   "Mods/OverWorldEncounters/002_VOE_Pokemon Behavior.rb",
   "Mods/OverWorldEncounters/003_VOE_Event Handlers.rb",
-  "Mods/OverWorldEncounters/004_VOE_Movement.rb"
+  "Mods/OverWorldEncounters/004_VOE_Movement.rb",
+  "Mods/OverWorldEncounters/005_VOE_VersionManager.rb"
+  # Note: 006_VOE_MapHelper.rb is a developer-only tool, not auto-loaded
 ]
 
 voe_scripts.each do |script|
@@ -353,3 +372,4 @@ voe_scripts.each do |script|
     # Script not found
   end
 end
+

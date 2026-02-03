@@ -99,17 +99,85 @@ def pbGenerateOverworldEncounters(water = false, full_map = false)
     unless is_fusion
       if defined?(VOEOutbreak) && VOEOutbreak.active?
         if VOEOutbreak.locked_species(enc_type)
-          # Same-Species Outbreak
+          # Same-Species Outbreak - already validated by enc_type
           pkmn_species = VOEOutbreak.locked_species(enc_type)
         else
           # Mixed-Species Outbreak: Get random species from ANY map (respecting terrain)
           pkmn_species = VOEOutbreak.get_random_species_from_any_map(enc_type)
+          
+          # VALIDATION: If we got a species, verify it can spawn on this terrain
+          # If the terrain doesn't match, fall back to current map's encounter
+          if pkmn_species
+            # Get what terrain category we're spawning on
+            terrain_cat = water ? :Water : $PokemonEncounters.has_cave_encounters? ? :Cave : :Land
+            
+            # Check if returned species is appropriate for this terrain
+            # by trying to find it in the current terrain's encounter list
+            species_valid = false
+            begin
+              if defined?(GameData::Encounter)
+                all_encounters = GameData::Encounter::DATA.values
+                all_encounters.each do |enc_data|
+                  next unless enc_data && enc_data.types
+                  enc_data.types.each do |type_key, type_data|
+                    next unless type_data
+                    # Check if this type matches our terrain
+                    is_matching_terrain = case terrain_cat
+                      when :Water
+                        [:Water, :WaterDay, :WaterNight, :OldRod, :GoodRod, :SuperRod].include?(type_key)
+                      when :Cave
+                        [:Cave, :CaveDay, :CaveNight].include?(type_key)
+                      else
+                        [:Land, :LandDay, :LandNight, :Grass].include?(type_key)
+                    end
+                    next unless is_matching_terrain
+                    
+                    # Check if our species exists in this encounter type
+                    type_data.each do |entry|
+                      if entry && entry[1] == pkmn_species
+                        species_valid = true
+                        break
+                      end
+                    end
+                    break if species_valid
+                  end
+                  break if species_valid
+                end
+              else
+                # No encounter data available, assume valid
+                species_valid = true
+              end
+            rescue => e
+              echoln "[VOE] Error validating species terrain: #{e.message}" if VOESettings::LOG_SPAWNS
+              species_valid = true  # Assume valid on error
+            end
+            
+            unless species_valid
+              echoln "[VOE] Species #{pkmn_species} invalid for #{terrain_cat} terrain, using local map species" if VOESettings::LOG_SPAWNS
+              pkmn_species = nil  # Force fallback below
+            end
+          end
         end
-        # Determine level from current map's encounter table
-        temp_data = VOESettings::DIFFERENT_ENCOUNTERS ? 
-                    pbChooseWildPokemonByVersion($game_map.map_id, enc_type, VOESettings::ENCOUNTER_TABLE) :
-                    $PokemonEncounters.choose_wild_pokemon_for_map($game_map.map_id, enc_type)
-        pkmn = Pokemon.new(pkmn_species, temp_data ? temp_data[1] : 1)
+        
+        # If we don't have a valid species, fall back to current map's encounter table
+        if pkmn_species.nil?
+          temp_data = VOESettings::DIFFERENT_ENCOUNTERS ? 
+                      pbChooseWildPokemonByVersion($game_map.map_id, enc_type, VOESettings::ENCOUNTER_TABLE) :
+                      $PokemonEncounters.choose_wild_pokemon_for_map($game_map.map_id, enc_type)
+          if temp_data
+            pkmn_species = temp_data[0]
+            pkmn = Pokemon.new(pkmn_species, temp_data[1])
+          else
+            echoln "[VOE] No valid species found for outbreak, skipping spawn" if VOESettings::LOG_SPAWNS
+            return false
+          end
+        else
+          # Determine level from current map's encounter table
+          temp_data = VOESettings::DIFFERENT_ENCOUNTERS ? 
+                      pbChooseWildPokemonByVersion($game_map.map_id, enc_type, VOESettings::ENCOUNTER_TABLE) :
+                      $PokemonEncounters.choose_wild_pokemon_for_map($game_map.map_id, enc_type)
+          pkmn = Pokemon.new(pkmn_species, temp_data ? temp_data[1] : 1)
+        end
       else
         if VOESettings::DIFFERENT_ENCOUNTERS
           pkmn_data = pbChooseWildPokemonByVersion($game_map.map_id, enc_type, VOESettings::ENCOUNTER_TABLE)
@@ -342,19 +410,23 @@ Events.onMapSceneChange += proc { |_sender, e|
       
       # Record the visit time
       VOESettings.set_map_visit_time($game_map.map_id, Time.now.to_f)
-      
-      # -----------------------------------
-      # RANDOM OUTBREAK CHANCE ON ENTRY
-      # -----------------------------------
-      if defined?(VOEOutbreak) && VOESettings::OUTBREAK_ENABLED && !VOEOutbreak.active?
-        if rand(100) < 15 # 15% chance on map entry
-          # Pick a random global species for the outbreak
-          global_species = VOEOutbreak.get_random_species_from_any_map
-          VOEOutbreak.start_outbreak(global_species) if global_species
-        end
-      end
     elsif recently_visited
       echoln "[VOE] Skipping initial spawns - map was visited recently"
+    end
+    
+    # -----------------------------------
+    # RANDOM OUTBREAK CHANCE ON ENTRY
+    # -----------------------------------
+    # Double-check blacklist here too (important!)
+    is_blacklisted = VOESettings::BLACK_LIST_MAPS.include?($game_map.map_id) || $game_map.map_id < 2
+    
+    if !is_blacklisted && defined?(VOEOutbreak) && VOESettings::OUTBREAK_ENABLED && !VOEOutbreak.active?
+      # Only trigger if cooldown has passed (20-60 min after last outbreak ended)
+      if VOEOutbreak.cooldown_passed? && rand(100) < 15  # 15% chance on map entry
+        # Queue outbreak to start 5 seconds after entering the map
+        VOEOutbreak.queue_delayed_outbreak(5.0)
+        echoln "[VOE] Outbreak queued to start in 5 seconds" if VOESettings::LOG_SPAWNS
+      end
     end
     
   rescue => err
@@ -447,8 +519,10 @@ Events.onMapUpdate += proc { |_sender, _e|
   next if $game_temp.frames_updated < spawn_threshold
   $game_temp.frames_updated = 0
   
-  $game_map.events.each_value do |event|
-    next unless event.name[/OverworldPkmn/i]
+  # Use .to_a to safely iterate (events may be destroyed during iteration)
+  $game_map.events.values.to_a.each do |event|
+    next if event.nil?
+    next unless event.name[/OverworldPkmn/i] rescue next
     next if event.variable.nil?
     pbPokemonIdle(event)
   end
@@ -466,8 +540,10 @@ Events.onStepTaken += proc { |_sender, _e|
   next if $game_temp.in_menu
   next if !$PokemonEncounters
   
-  $game_map.events.each_value do |event|
-    next unless event.name[/OverworldPkmn/i]
+  # Use .to_a to safely iterate
+  $game_map.events.values.to_a.each do |event|
+    next if event.nil?
+    next unless event.name[/OverworldPkmn/i] rescue next
     next if event.variable.nil?
     pbDestroyOverworldEncounter(event) if pbTrainersSeePkmn(event)
   end
