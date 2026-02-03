@@ -158,12 +158,10 @@ for /f "usebackq tokens=*" %%f in ("%TEMP%\voe_files.txt") do (
     set "FILE=%%f"
     :: Skip comments, empty lines, and lines that don't look like file paths
     if not "!FILE!"=="" if not "!FILE:~0,1!"=="#" (
-        :: Check if line starts with "Mods/" (valid file path)
-        echo !FILE! | findstr /i /b "Mods/" >nul 2>&1
-        if errorlevel 1 (
-            echo Skipping invalid line: !FILE!
-        ) else (
-        :: Convert forward slashes to backslashes for local path
+        :: Check if line starts with "Mods/" (valid file path) - use string comparison
+        set "FILE_CHECK=!FILE:~0,5!"
+        if /i "!FILE_CHECK!"=="Mods/" (
+            :: Convert forward slashes to backslashes for local path
         set "LOCAL_PATH=!FILE:/=\!"
         
         :: URL-encode the filename for GitHub raw URL (spaces -> %20)
@@ -192,6 +190,8 @@ for /f "usebackq tokens=*" %%f in ("%TEMP%\voe_files.txt") do (
         ) else (
             echo   OK: !FILE!
         )
+        ) else (
+            echo Skipping invalid line: !FILE!
         )
     )
 )
