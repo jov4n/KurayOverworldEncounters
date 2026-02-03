@@ -107,26 +107,30 @@ echo ========================================
 :: Try to fetch file list, fall back to default
 curl -s -o "%TEMP%\voe_files.txt" "%FILES_URL%" 2>nul
 
-:: Check if file exists and contains valid content (not a 404 error)
+:: Validate downloaded file - must contain valid paths and no error messages
 set "USE_DEFAULT=1"
 if exist "%TEMP%\voe_files.txt" (
-    :: Check for HTML error page indicators
-    findstr /i "<html" "%TEMP%\voe_files.txt" >nul 2>&1
+    :: Check for error indicators first (if found, file is invalid - use default)
+    findstr /i "404" "%TEMP%\voe_files.txt" >nul 2>&1
     if errorlevel 1 (
-        findstr /i "<!DOCTYPE" "%TEMP%\voe_files.txt" >nul 2>&1
+        :: No "404" found, check for "Not Found"
+        findstr /i "Not Found" "%TEMP%\voe_files.txt" >nul 2>&1
         if errorlevel 1 (
-            findstr /i "404" "%TEMP%\voe_files.txt" >nul 2>&1
+            :: No "Not Found" found, check for HTML
+            findstr /i "<html" "%TEMP%\voe_files.txt" >nul 2>&1
             if errorlevel 1 (
-                findstr /i "Not Found" "%TEMP%\voe_files.txt" >nul 2>&1
-                if errorlevel 1 (
-                    :: Check if file contains valid file paths
-                    findstr /i "Mods/" "%TEMP%\voe_files.txt" >nul 2>&1
-                    if not errorlevel 1 (
-                        set "USE_DEFAULT=0"
-                    )
+                :: File doesn't contain error messages, check if it has valid paths
+                findstr /i /b "Mods/" "%TEMP%\voe_files.txt" >nul 2>&1
+                if not errorlevel 1 (
+                    :: File has valid paths and no errors - use it
+                    set "USE_DEFAULT=0"
                 )
             )
         )
+    )
+    :: If validation failed, delete the invalid file so we use default
+    if "%USE_DEFAULT%"=="1" (
+        del "%TEMP%\voe_files.txt" 2>nul
     )
 )
 
