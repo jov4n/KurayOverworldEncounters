@@ -23,12 +23,11 @@ set "VERSION_URL=https://raw.githubusercontent.com/%REPO%/refs/heads/%BRANCH%/ve
 set "FILES_URL=https://raw.githubusercontent.com/%REPO%/refs/heads/%BRANCH%/files.txt"
 set "RAW_BASE=https://raw.githubusercontent.com/%REPO%/refs/heads/%BRANCH%"
 
-:: Get current version from local file
+:: Get current version from local version.txt file
 set "LOCAL_VERSION=Unknown"
-if exist "Mods\OverWorldEncounters\005_VOE_VersionManager.rb" (
-    for /f "tokens=2 delims==" %%a in ('findstr /i /c:"VERSION = " "Mods\OverWorldEncounters\005_VOE_VersionManager.rb" ^| findstr /v /c:"VERSION_DATE"') do (
+if exist "version.txt" (
+    for /f "tokens=2 delims==" %%a in ('findstr /i "version=" "version.txt"') do (
         set "LOCAL_VERSION=%%a"
-        set "LOCAL_VERSION=!LOCAL_VERSION:"=!"
         set "LOCAL_VERSION=!LOCAL_VERSION: =!"
         goto :version_found
     )
@@ -148,6 +147,11 @@ for /f "usebackq tokens=*" %%f in ("%TEMP%\voe_files.txt") do (
             echo   OK: !FILE!
         )
     )
+)
+
+:: Update local version.txt if update was successful
+if "%SUCCESS%"=="1" (
+    echo version=%REMOTE_VERSION% > "version.txt"
 )
 
 :: Cleanup
