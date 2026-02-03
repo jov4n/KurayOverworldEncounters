@@ -19,7 +19,7 @@ echo.
 :: Configuration
 set "REPO=jov4n/KurayOverworldEncounters"
 set "BRANCH=main"
-set "VERSION_URL=https://raw.githubusercontent.com/%REPO%/refs/heads/%BRANCH%/version.txt"
+set "VERSION_URL=https://raw.githubusercontent.com/%REPO%/refs/heads/%BRANCH%/Mods/OverWorldEncounters/version.txt"
 set "FILES_URL=https://raw.githubusercontent.com/%REPO%/refs/heads/%BRANCH%/files.txt"
 set "RAW_BASE=https://raw.githubusercontent.com/%REPO%/refs/heads/%BRANCH%"
 
