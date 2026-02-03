@@ -19,9 +19,9 @@ echo.
 :: Configuration
 set "REPO=jov4n/KurayOverworldEncounters"
 set "BRANCH=main"
-set "VERSION_URL=https://raw.githubusercontent.com/%REPO%/refs/heads/%BRANCH%/Mods/OverWorldEncounters/version.txt"
-set "FILES_URL=https://raw.githubusercontent.com/%REPO%/refs/heads/%BRANCH%/Mods/OverWorldEncounters/files.txt"
-set "RAW_BASE=https://raw.githubusercontent.com/%REPO%/refs/heads/%BRANCH%"
+set "VERSION_URL=https://raw.githubusercontent.com/%REPO%/%BRANCH%/Mods/OverWorldEncounters/version.txt"
+set "FILES_URL=https://raw.githubusercontent.com/%REPO%/%BRANCH%/Mods/OverWorldEncounters/files.txt"
+set "RAW_BASE=https://raw.githubusercontent.com/%REPO%/%BRANCH%"
 
 :: Get current version from local version.txt file (check multiple locations)
 set "LOCAL_VERSION=Unknown"
@@ -110,11 +110,22 @@ curl -s -o "%TEMP%\voe_files.txt" "%FILES_URL%" 2>nul
 :: Check if file exists and contains valid content (not a 404 error)
 set "USE_DEFAULT=1"
 if exist "%TEMP%\voe_files.txt" (
-    findstr /i "404" "%TEMP%\voe_files.txt" >nul 2>&1
+    :: Check for HTML error page indicators
+    findstr /i "<html" "%TEMP%\voe_files.txt" >nul 2>&1
     if errorlevel 1 (
-        findstr /i "Mods/" "%TEMP%\voe_files.txt" >nul 2>&1
-        if not errorlevel 1 (
-            set "USE_DEFAULT=0"
+        findstr /i "<!DOCTYPE" "%TEMP%\voe_files.txt" >nul 2>&1
+        if errorlevel 1 (
+            findstr /i "404" "%TEMP%\voe_files.txt" >nul 2>&1
+            if errorlevel 1 (
+                findstr /i "Not Found" "%TEMP%\voe_files.txt" >nul 2>&1
+                if errorlevel 1 (
+                    :: Check if file contains valid file paths
+                    findstr /i "Mods/" "%TEMP%\voe_files.txt" >nul 2>&1
+                    if not errorlevel 1 (
+                        set "USE_DEFAULT=0"
+                    )
+                )
+            )
         )
     )
 )
@@ -141,8 +152,13 @@ mkdir "%BACKUP_DIR%" 2>nul
 set "SUCCESS=1"
 for /f "usebackq tokens=*" %%f in ("%TEMP%\voe_files.txt") do (
     set "FILE=%%f"
-    :: Skip comments and empty lines
+    :: Skip comments, empty lines, and lines that don't look like file paths
     if not "!FILE!"=="" if not "!FILE:~0,1!"=="#" (
+        :: Check if line starts with "Mods/" (valid file path)
+        echo !FILE! | findstr /i /b "Mods/" >nul 2>&1
+        if errorlevel 1 (
+            echo Skipping invalid line: !FILE!
+        ) else (
         :: Convert forward slashes to backslashes for local path
         set "LOCAL_PATH=!FILE:/=\!"
         
@@ -171,6 +187,7 @@ for /f "usebackq tokens=*" %%f in ("%TEMP%\voe_files.txt") do (
             set "SUCCESS=0"
         ) else (
             echo   OK: !FILE!
+        )
         )
     )
 )
