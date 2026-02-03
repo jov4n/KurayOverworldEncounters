@@ -1,6 +1,15 @@
 @echo off
 setlocal enabledelayedexpansion
 
+:: Change to game root directory (script is in Mods folder)
+cd /d "%~dp0\.."
+if not exist "Mods\OverWorldEncounters" (
+    echo ERROR: Could not find game root directory.
+    echo Please run this script from the game folder.
+    pause
+    exit /b 1
+)
+
 echo ========================================
 echo  VOE - Kuray's Overworld Encounters
 echo  Updater Script
@@ -17,12 +26,14 @@ set "RAW_BASE=https://raw.githubusercontent.com/%REPO%/refs/heads/%BRANCH%"
 :: Get current version from local file
 set "LOCAL_VERSION=Unknown"
 if exist "Mods\OverWorldEncounters\005_VOE_VersionManager.rb" (
-    for /f "tokens=2 delims==" %%a in ('findstr /i "VERSION =" "Mods\OverWorldEncounters\005_VOE_VersionManager.rb" ^| findstr /v "VERSION_DATE"') do (
+    for /f "tokens=2 delims==" %%a in ('findstr /i /c:"VERSION = " "Mods\OverWorldEncounters\005_VOE_VersionManager.rb" ^| findstr /v /c:"VERSION_DATE"') do (
         set "LOCAL_VERSION=%%a"
         set "LOCAL_VERSION=!LOCAL_VERSION:"=!"
         set "LOCAL_VERSION=!LOCAL_VERSION: =!"
+        goto :version_found
     )
 )
+:version_found
 echo Current version: %LOCAL_VERSION%
 echo.
 
