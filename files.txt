@@ -1,0 +1,11 @@
+# VOE - Kuray's Overworld Encounters
+# File list for auto-updater
+# Lines starting with # are comments and will be ignored
+
+Mods/02_OverworldEncounters.rb
+Mods/OverWorldEncounters/000_VOE_Utils.rb
+Mods/OverWorldEncounters/001_VOE_Config.rb
+Mods/OverWorldEncounters/002_VOE_Pokemon Behavior.rb
+Mods/OverWorldEncounters/003_VOE_Event Handlers.rb
+Mods/OverWorldEncounters/004_VOE_Movement.rb
+Mods/OverWorldEncounters/005_VOE_VersionManager.rb
