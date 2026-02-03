@@ -20,7 +20,7 @@ echo.
 set "REPO=jov4n/KurayOverworldEncounters"
 set "BRANCH=main"
 set "VERSION_URL=https://raw.githubusercontent.com/%REPO%/refs/heads/%BRANCH%/Mods/OverWorldEncounters/version.txt"
-set "FILES_URL=https://raw.githubusercontent.com/%REPO%/refs/heads/%BRANCH%/files.txt"
+set "FILES_URL=https://raw.githubusercontent.com/%REPO%/refs/heads/%BRANCH%/Mods/OverWorldEncounters/files.txt"
 set "RAW_BASE=https://raw.githubusercontent.com/%REPO%/refs/heads/%BRANCH%"
 
 :: Get current version from local version.txt file (check multiple locations)
@@ -107,7 +107,19 @@ echo ========================================
 :: Try to fetch file list, fall back to default
 curl -s -o "%TEMP%\voe_files.txt" "%FILES_URL%" 2>nul
 
-if not exist "%TEMP%\voe_files.txt" (
+:: Check if file exists and contains valid content (not a 404 error)
+set "USE_DEFAULT=1"
+if exist "%TEMP%\voe_files.txt" (
+    findstr /i "404" "%TEMP%\voe_files.txt" >nul 2>&1
+    if errorlevel 1 (
+        findstr /i "Mods/" "%TEMP%\voe_files.txt" >nul 2>&1
+        if not errorlevel 1 (
+            set "USE_DEFAULT=0"
+        )
+    )
+)
+
+if "%USE_DEFAULT%"=="1" (
     echo Using default file list...
     (
         echo Mods/02_OverworldEncounters.rb
