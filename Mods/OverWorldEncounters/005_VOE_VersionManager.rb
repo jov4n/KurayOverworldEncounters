@@ -6,7 +6,7 @@
 # ==============================================================================
 
 module VOEVersion
-  VERSION = "2.0.0"
+  VERSION = "2.1.0"
   VERSION_DATE = "2026-02-02"
   
   GITHUB_REPO = "jov4n/KurayOverworldEncounters"
