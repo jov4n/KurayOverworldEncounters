@@ -107,9 +107,13 @@ for /f "usebackq tokens=*" %%f in ("%TEMP%\voe_files.txt") do (
     set "FILE=%%f"
     :: Skip comments and empty lines
     if not "!FILE!"=="" if not "!FILE:~0,1!"=="#" (
-        :: Convert forward slashes to backslashes
+        :: Convert forward slashes to backslashes for local path
         set "LOCAL_PATH=!FILE:/=\!"
-        set "DOWNLOAD_URL=%RAW_BASE%/!FILE!"
+        
+        :: URL-encode the filename for GitHub raw URL (spaces -> %20)
+        set "URL_FILE=!FILE!"
+        set "URL_FILE=!URL_FILE: =%%20!"
+        set "DOWNLOAD_URL=%RAW_BASE%/!URL_FILE!"
         
         echo Downloading: !FILE!
         
