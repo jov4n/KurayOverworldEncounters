@@ -23,17 +23,31 @@ set "VERSION_URL=https://raw.githubusercontent.com/%REPO%/refs/heads/%BRANCH%/ve
 set "FILES_URL=https://raw.githubusercontent.com/%REPO%/refs/heads/%BRANCH%/files.txt"
 set "RAW_BASE=https://raw.githubusercontent.com/%REPO%/refs/heads/%BRANCH%"
 
-:: Get current version from local version.txt file
+:: Get current version from local version.txt file (check multiple locations)
 set "LOCAL_VERSION=Unknown"
 if exist "version.txt" (
-    for /f "tokens=2 delims==" %%a in ('findstr /i "version=" "version.txt"') do (
+    for /f "usebackq tokens=2 delims==" %%a in ("version.txt") do (
         set "LOCAL_VERSION=%%a"
         set "LOCAL_VERSION=!LOCAL_VERSION: =!"
-        goto :version_found
+        if not "!LOCAL_VERSION!"=="" goto :version_found
+    )
+)
+if exist "Mods\version.txt" (
+    for /f "usebackq tokens=2 delims==" %%a in ("Mods\version.txt") do (
+        set "LOCAL_VERSION=%%a"
+        set "LOCAL_VERSION=!LOCAL_VERSION: =!"
+        if not "!LOCAL_VERSION!"=="" goto :version_found
+    )
+)
+if exist "Mods\OverWorldEncounters\version.txt" (
+    for /f "usebackq tokens=2 delims==" %%a in ("Mods\OverWorldEncounters\version.txt") do (
+        set "LOCAL_VERSION=%%a"
+        set "LOCAL_VERSION=!LOCAL_VERSION: =!"
+        if not "!LOCAL_VERSION!"=="" goto :version_found
     )
 )
 :version_found
-echo Current version: %LOCAL_VERSION%
+echo Current version: !LOCAL_VERSION!
 echo.
 
 :: Check for curl
@@ -149,9 +163,9 @@ for /f "usebackq tokens=*" %%f in ("%TEMP%\voe_files.txt") do (
     )
 )
 
-:: Update local version.txt if update was successful
+:: Update local version.txt if update was successful (update in Mods\OverWorldEncounters folder)
 if "%SUCCESS%"=="1" (
-    echo version=%REMOTE_VERSION% > "version.txt"
+    echo version=%REMOTE_VERSION% > "Mods\OverWorldEncounters\version.txt"
 )
 
 :: Cleanup
