@@ -6,11 +6,12 @@ def pbInteractOverworldEncounter
   pkmn = evt.variable[0]
   return pbDestroyOverworldEncounter(evt, false, false, true) if pkmn.nil?
   
-  # Check for nearby encounters for horde battle (2v1)
-  nearby_encounter = nil
-  nearby_event = nil
+  # Check for nearby encounters for horde battle (up to 2 nearby neighbors for 3v1 support)
+  nearby_encounters = []
+  nearby_events = []
+  nearby_event_ids = []  # Store IDs to prevent race conditions
   
-  if VOESettings::HORDE_BATTLES  # 2v1 even with just 1 Pokemon!
+  if VOESettings::HORDE_BATTLES
     horde_dist = VOESettings::HORDE_DISTANCE
     # Use .to_a to safely iterate (prevents issues if events are modified)
     $game_map.events.values.to_a.each do |event|
@@ -19,44 +20,159 @@ def pbInteractOverworldEncounter
       next unless event.name[/OverworldPkmn/i] rescue next
       next if event.variable.nil?
       next if event.variable[0].nil?
+      next if event.lock?  # Skip if event is already locked (being processed)
       
       # Check true distance between encounters (Euclidean)
       dx = event.x - evt.x
       dy = event.y - evt.y
       true_distance = Math.sqrt(dx * dx + dy * dy)
       if true_distance <= horde_dist
-        nearby_encounter = event.variable[0]
-        nearby_event = event
-        echoln "[VOE] Horde! Found nearby #{nearby_encounter.name} at distance #{true_distance.round(1)}" if VOESettings::LOG_SPAWNS
-        break
+        nearby_encounters << event.variable[0]
+        nearby_events << event
+        nearby_event_ids << event.id  # Store ID for validation
+        echoln "[VOE] Horde! Found nearby #{event.variable[0].name} at distance #{true_distance.round(1)}" if VOESettings::LOG_SPAWNS
+        break if nearby_encounters.length >= 2 # Cap at 3 Pokémon total (Self + 2 Neighbors)
       end
     end
   end
+  
+  # Lock nearby events to prevent race conditions (other encounters trying to interact with them)
+  nearby_events.each do |event|
+    event.lock if event && !event.lock?
+  end
+  
+  # Validate that nearby events still exist and have valid Pokémon (race condition check)
+  valid_nearby_encounters = []
+  valid_nearby_events = []
+  nearby_encounters.each_with_index do |encounter, idx|
+    event = nearby_events[idx]
+    event_id = nearby_event_ids[idx]
+    # Verify event still exists in map and has valid data
+    if event && $game_map.events[event_id] == event && event.variable && event.variable[0] == encounter
+      valid_nearby_encounters << encounter
+      valid_nearby_events << event
+    else
+      echoln "[VOE] Warning: Nearby event #{event_id} became invalid, skipping" if VOESettings::LOG_SPAWNS
+    end
+  end
+  nearby_encounters = valid_nearby_encounters
+  nearby_events = valid_nearby_events
   
   GameData::Species.play_cry_from_pokemon(pkmn)
   name = pkmn.name
   name_half = (name.length.to_f / 2).ceil
   textcol = VOESettings::COLORFUL_TEXT ? ((pkmn.genderless?) ? "" : (pkmn.male?) ? "\\b" : "\\r") : ""
   
-  if nearby_encounter
-    # Double battle! (2v1 horde)
-    GameData::Species.play_cry_from_pokemon(nearby_encounter)
-    name2 = nearby_encounter.name
-    pbMessage(_INTL("{1}{2} and {3} appeared together!", textcol, name, name2))
-    setBattleRule("double")
-    decision = pbWildBattleCore(pkmn, nearby_encounter)
-    # FORCE destroy BOTH encounters after ANY battle outcome (catch, defeat, or run)
-    # We no longer allow shiny protection after a battle - the encounter is consumed
-    echoln "[VOE] Horde battle ended with decision #{decision}, force-destroying both events" if VOESettings::LOG_SPAWNS
-    pbDestroyOverworldEncounter(nearby_event, decision == 4, false, true) # force=true
+  # Fusion check logic
+  fused_pkmn = nil
+  remaining_pkmn = []
+  
+  if nearby_encounters.length > 0 && VOESettings::FUSION_ENCOUNTERS && rand(VOESettings::FUSION_RATE) <= 1
+    # Collect all candidates (self + nearby)
+    all_candidates = [pkmn] + nearby_encounters
+    
+    # Ensure everyone involved is a base form Pokémon (not already fused)
+    all_base = all_candidates.all? { |p| getDexNumberForSpecies(p.species) <= Settings::NB_POKEMON }
+    
+    if all_base
+      # Randomly pick 2 from the group to fuse
+      all_indices = (0...all_candidates.length).to_a
+      idx1, idx2 = all_indices.sample(2)
+      p1 = all_candidates[idx1]
+      p2 = all_candidates[idx2]
+      
+      # Get dex numbers for fusion
+      body_dex = getDexNumberForSpecies(p1.species)
+      head_dex = getDexNumberForSpecies(p2.species)
+      
+      # Create fusion
+      fusion_species = getFusedPokemonIdFromDexNum(body_dex, head_dex)
+      avg_level = ((p1.level + p2.level) / 2.0).round
+      fused_pkmn = Pokemon.new(fusion_species, avg_level)
+      
+      # Initialize fusion properly
+      fused_pkmn.calc_stats
+      fused_pkmn.reset_moves
+      
+      # Preserve shiny status - if either was shiny, fusion is shiny
+      if p1.shiny? || p2.shiny?
+        if fused_pkmn.respond_to?(:makeShiny)
+          fused_pkmn.makeShiny
+        else
+          fused_pkmn.shiny = true
+        end
+      end
+      
+      # Determine who is left over (for 2v1 battles when 3 Pokémon were present)
+      all_indices.each { |i| remaining_pkmn << all_candidates[i] if i != idx1 && i != idx2 }
+      
+      # Play sound effect and show message
+      pbSEPlay("Voltorb Flip Point")
+      pbMessage(_INTL("Wait! {1} and {2} are fusing!", p1.name, p2.name))
+      
+      echoln "[VOE] Fusion occurred! #{p1.name} + #{p2.name} = #{fused_pkmn.name}" if VOESettings::LOG_SPAWNS
+    end
+  end
+  
+  # Battle execution
+  decision = nil
+  
+  if fused_pkmn
+    if remaining_pkmn.length > 0
+      # 2v1 Battle: Fused Pokémon + Remaining Single vs Player
+      GameData::Species.play_cry_from_pokemon(remaining_pkmn[0])
+      pbMessage(_INTL("{1}{2} and {3} appeared together!", textcol, fused_pkmn.name, remaining_pkmn[0].name))
+      setBattleRule("double")
+      decision = pbWildBattleCore(fused_pkmn, remaining_pkmn[0])
+    else
+      # 1v1 Battle: Resulting Fusion vs Player
+      fused_name = fused_pkmn.name
+      fused_name_half = (fused_name.length.to_f / 2).ceil
+      pbMessage(_INTL("{1}{2}!", textcol, fused_name[0, fused_name_half] + fused_name[fused_name_half] + fused_name[fused_name_half]))
+      decision = pbWildBattleCore(fused_pkmn)
+    end
+  else
+    # No fusion occurred: Standard Triple, Double, or Single Battle
+    if nearby_encounters.length == 2
+      # Triple Battle (3v1)
+      GameData::Species.play_cry_from_pokemon(nearby_encounters[0])
+      GameData::Species.play_cry_from_pokemon(nearby_encounters[1])
+      pbMessage(_INTL("{1}{2}, {3} and {4} appeared together!", textcol, name, nearby_encounters[0].name, nearby_encounters[1].name))
+      setBattleRule("3v1")
+      decision = pbWildBattleCore(pkmn, nearby_encounters[0], nearby_encounters[1])
+    elsif nearby_encounters.length == 1
+      # Double Battle (2v1)
+      GameData::Species.play_cry_from_pokemon(nearby_encounters[0])
+      pbMessage(_INTL("{1}{2} and {3} appeared together!", textcol, name, nearby_encounters[0].name))
+      setBattleRule("double")
+      decision = pbWildBattleCore(pkmn, nearby_encounters[0])
+    else
+      # Single battle
+      pbMessage(_INTL("{1}{2}!", textcol, name[0, name_half] + name[name_half] + name[name_half]))
+      decision = pbWildBattleCore(pkmn)
+    end
+  end
+  
+  # FORCE destroy ALL encounters after ANY battle outcome (catch, defeat, or run)
+  # We no longer allow shiny protection after a battle - the encounter is consumed
+  echoln "[VOE] Battle ended with decision #{decision}, force-destroying all events" if VOESettings::LOG_SPAWNS
+  
+  # Destroy all nearby events (validate they still exist to prevent race conditions)
+  nearby_events.each do |event|
+    next unless event  # Skip if nil
+    # Verify event still exists in map before destroying
+    if $game_map.events[event.id] == event
+      pbDestroyOverworldEncounter(event, decision == 4, false, true) # force=true
+    else
+      echoln "[VOE] Warning: Nearby event #{event.id} no longer exists, skipping cleanup" if VOESettings::LOG_SPAWNS
+    end
+  end
+  
+  # Destroy main event (validate it still exists)
+  if $game_map.events[evt.id] == evt
     pbDestroyOverworldEncounter(evt, decision == 4, decision != 4, true) # force=true
   else
-    # Single battle
-    pbMessage(_INTL("{1}{2}!", textcol, name[0, name_half] + name[name_half] + name[name_half]))
-    decision = pbWildBattleCore(pkmn)
-    # FORCE destroy after ANY battle outcome
-    echoln "[VOE] Battle ended with decision #{decision}, force-destroying event" if VOESettings::LOG_SPAWNS
-    pbDestroyOverworldEncounter(evt, decision == 4, decision != 4, true) # force=true
+    echoln "[VOE] Warning: Main event #{evt.id} no longer exists, skipping cleanup" if VOESettings::LOG_SPAWNS
   end
   
   $game_temp.overworld_encounter = false
