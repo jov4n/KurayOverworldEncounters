@@ -545,6 +545,7 @@ Events.onStepTaken += proc { |_sender, _e|
     next if event.nil?
     next unless event.name[/OverworldPkmn/i] rescue next
     next if event.variable.nil?
+    pbRepelFlee(event)
     pbDestroyOverworldEncounter(event) if pbTrainersSeePkmn(event)
   end
 }
