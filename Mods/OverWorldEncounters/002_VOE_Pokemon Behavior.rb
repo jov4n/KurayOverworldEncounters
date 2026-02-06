@@ -392,6 +392,23 @@ def pbDistanceToPlayer(evt)
   return Math.sqrt(dx * dx + dy * dy).round
 end
 
+
+def pbRepelCheck(event)
+  return false if !$PokemonGlobal || !$PokemonGlobal.repel || $PokemonGlobal.repel <= 0
+  return true
+end
+
+def pbRepelFlee(event)
+  return if event.lock?
+  return if !pbRepelCheck(event)
+  
+  # Check distance
+  dist = pbDistanceToPlayer(event)
+  return if dist > 6 # Only flee if active range
+  
+  event.move_away_from_player
+end
+
 def pbPokemonIdle(evt)
   return if rand(3) == 1
   return if !evt
