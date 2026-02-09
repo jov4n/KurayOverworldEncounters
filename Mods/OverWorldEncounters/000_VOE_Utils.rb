@@ -13,7 +13,7 @@ end
 # The base game has a bug where chance_rolls is used but not defined
 # ------------------------------------------------------------------------------
 class PokemonEncounters
-  alias voe_original_choose_wild_pokemon_for_map choose_wild_pokemon_for_map
+  alias voe_original_choose_wild_pokemon_for_map choose_wild_pokemon_for_map unless method_defined?(:voe_original_choose_wild_pokemon_for_map)
   
   def choose_wild_pokemon_for_map(map_ID, enc_type, chance_rolls = 1)
     if !enc_type || !GameData::EncounterType.exists?(enc_type)
@@ -267,8 +267,8 @@ class VOE_Sparkle
     @offset_x = Math.cos(angle) * dist
     @offset_y = Math.sin(angle) * dist
     
-    @sprite.x = @event.screen_x + @offset_x
-    @sprite.y = @event.screen_y - 16 + @offset_y
+    @sprite.x = safe_sprite_coord(@event.screen_x + @offset_x, 0)
+    @sprite.y = safe_sprite_coord(@event.screen_y - 16 + @offset_y, 0)
     
     if @is_sequential
       # Ensure lifetime is at least one full loop + a bit more
@@ -314,11 +314,11 @@ class VOE_Sparkle
     
     # Position
     if @event && !@event.disposed?
-      @sprite.x = @event.screen_x + @offset_x
-      @sprite.y = @event.screen_y - 16 + @offset_y
+      @sprite.x = safe_sprite_coord(@event.screen_x + @offset_x, @sprite.x)
+      @sprite.y = safe_sprite_coord(@event.screen_y - 16 + @offset_y, @sprite.y)
     else
-      @sprite.x += @velocity_x
-      @sprite.y += @velocity_y
+      @sprite.x = safe_sprite_coord(@sprite.x + @velocity_x, @sprite.x)
+      @sprite.y = safe_sprite_coord(@sprite.y + @velocity_y, @sprite.y)
     end
     
     @offset_x += @velocity_x
@@ -331,6 +331,16 @@ class VOE_Sparkle
     @sprite.zoom_y = scale
     
     return false
+  end
+
+  private
+
+  def safe_sprite_coord(value, fallback = 0)
+    return fallback unless value.is_a?(Numeric)
+    return fallback if value.is_a?(Float) && (value.nan? || (value.respond_to?(:finite?) && !value.finite?))
+    return value.round
+  rescue
+    return fallback
   end
 
   def dispose
