@@ -211,11 +211,11 @@ def get_grass_tile(full_map = false)
       next if x == $game_player.x && y == $game_player.y
       
       # Check terrain tag
-      terrain_id = $game_map.terrain_tag(x, y).id rescue :None
-      next if terrain_id == :Rock
+      terrain_tag = VOESettings.terrain_tag_at(x, y)
+      next if terrain_tag.id == :Rock
       
       # Check passability
-      is_water = VOESettings::WATER_TILES.include?(terrain_id)
+      is_water = VOESettings.water_tag?(terrain_tag)
       next if !$game_map.passable?(x, y, 0) && !is_water
       
       # Skip if an event is there
@@ -223,8 +223,7 @@ def get_grass_tile(full_map = false)
       next if has_event
       
       # Check if this is a proper encounter tile
-      is_terrain_tile = VOESettings::GRASS_TILES.include?(terrain_id) ||
-                        VOESettings::WATER_TILES.include?(terrain_id) ||
+      is_terrain_tile = VOESettings.encounter_tile?(x, y) ||
                         $PokemonEncounters.has_cave_encounters?
       
       if is_terrain_tile
@@ -239,15 +238,6 @@ def get_grass_tile(full_map = false)
     
     # Prefer terrain tiles, but use passable tiles as fallback for cave maps
     possible_tiles = terrain_tiles.any? ? terrain_tiles : passable_tiles
-    
-    # Filter water tiles if needed
-    if VOESettings::WATER_SPAWNS_ONLY_SURFING && !$PokemonGlobal.surfing
-      possible_tiles.delete_if { |tile| VOESettings::WATER_TILES.include?($game_map.terrain_tag(tile[0], tile[1]).id) }
-    end
-
-    if VOESettings::BLACK_LIST_WATER.include?($game_map.map_id)
-      possible_tiles.delete_if { |tile| VOESettings::WATER_TILES.include?($game_map.terrain_tag(tile[0], tile[1]).id) }
-    end
   else
     # Original behavior: search near player
     possible_distance = (VOESettings::MAX_DISTANCE * 0.75).round
@@ -262,8 +252,15 @@ def get_grass_tile(full_map = false)
         next if y < 0 || y >= $game_map.height
         # Don't check if on top of the player
         next if x == $game_player.x && y == $game_player.y
+        
+        terrain_tag = VOESettings.terrain_tag_at(x, y)
+        # Returning by Tile Ids
+        next if terrain_tag.id == :Rock
+        
         # Don't spawn on impassable tiles
-        next if !$game_map.passable?(x, y, 0) unless VOESettings::WATER_TILES.include?($game_map.terrain_tag(x, y).id)
+        is_water = VOESettings.water_tag?(terrain_tag)
+        next if !$game_map.passable?(x, y, 0) && !is_water
+        
         # Don't spawn if on top of an event
         on_top = false
         $game_map.events.each_value do |event|
@@ -272,35 +269,29 @@ def get_grass_tile(full_map = false)
           break
         end
 
-        # Returning by Tile Ids
-        next if $game_map.terrain_tag(x, y).id == :Rock
         next if on_top
 
         # Don't spawn if a trainer can see it
         next if pbTrainersSeePkmn(Temp_Event.new(x, y, $game_map.map_id))
         # Spawn only if on an encounter tile
 
-        next unless
-          VOESettings::GRASS_TILES.include?($game_map.terrain_tag(x, y).id) ||
-          VOESettings::WATER_TILES.include?($game_map.terrain_tag(x, y).id) ||
-          $PokemonEncounters.has_cave_encounters?
+        next unless VOESettings.encounter_tile?(x, y) || $PokemonEncounters.has_cave_encounters?
 
         # Add to possible tiles
         possible_tiles.push([x, y])
-
-        if VOESettings::WATER_SPAWNS_ONLY_SURFING
-          possible_tiles.dup.each do |tile|
-            possible_tiles.delete(tile) if VOESettings::WATER_TILES.include?($game_map.terrain_tag(tile[0], tile[1]).id) unless $PokemonGlobal.surfing
-          end
-        end
-
-        if VOESettings::BLACK_LIST_WATER.include?($game_map.map_id)
-          possible_tiles.dup.each do |tile|
-            possible_tiles.delete(tile) if VOESettings::WATER_TILES.include?($game_map.terrain_tag(tile[0], tile[1]).id)
-          end
-        end
       end
     end
+  end
+
+  # While surfing, only spawn on surfable water tiles.
+  if $PokemonGlobal && $PokemonGlobal.surfing
+    possible_tiles.delete_if { |tile| !VOESettings.water_tile?(tile[0], tile[1]) }
+  elsif VOESettings::WATER_SPAWNS_ONLY_SURFING
+    possible_tiles.delete_if { |tile| VOESettings.water_tile?(tile[0], tile[1]) }
+  end
+
+  if VOESettings::BLACK_LIST_WATER.include?($game_map.map_id)
+    possible_tiles.delete_if { |tile| VOESettings.water_tile?(tile[0], tile[1]) }
   end
   
   return (possible_tiles.empty? ? [] : possible_tiles.sample)
