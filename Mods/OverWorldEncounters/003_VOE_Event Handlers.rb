@@ -15,10 +15,16 @@ def pbGenerateOverworldEncounters(water = false, full_map = false)
       return false
     end
     
-    tile_id = $game_map.map_id < 2 ? :Grass : pbGetTileID($game_map.map_id, tile[0], tile[1])
-    water = VOESettings::WATER_TILES.include?(tile_id)
+    tile_tag = VOESettings.terrain_tag_at(tile[0], tile[1])
+    tile_id = tile_tag.id
+    water = VOESettings.water_tag?(tile_tag)
     echoln "# --------------------------------------------------------------- #" if VOESettings::LOG_SPAWNS
     echoln "[generateOWEncounter line 15] #{tile_id} (#{tile}) [Water? #{water}]" if VOESettings::LOG_SPAWNS
+
+    if $PokemonGlobal&.surfing && !water
+      echoln "[VOE] Skipping non-water tile while surfing: #{tile}" if VOESettings::LOG_SPAWNS
+      return false
+    end
 
     if water
       enc_type = $PokemonEncounters.find_valid_encounter_type_for_time(:Water, pbGetTimeNow)
@@ -363,7 +369,7 @@ Events.onSpritesetCreate += proc { |_sender, e|
     next if event.variable.nil?
     pkmn = event.variable[0]
     next if pkmn.nil?
-    water = VOESettings::WATER_TILES.include?(pbGetTileID($game_map.map_id, event.x, event.y))
+    water = VOESettings.water_tile?(event.x, event.y)
     pbChangeEventSprite(event, pkmn, water)
   end
 }
