@@ -9,8 +9,8 @@ class VOESettings
 60, 61, 62, 63, 64, 65, 67, 68, 69, 70, 71, 73, 76, 77, 79, 80, 81,
 83, 84, 85, 87, 91, 93, 95, 98, 100, 108, 109, 110, 111, 119, 120,
 121, 122, 125, 130, 131, 134, 135, 136, 137, 138, 141, 149, 152,
-153, 156, 167, 168, 169, 170, 173, 174, 176, 177, 180, 181, 182,
-183, 184, 187, 188, 189, 190, 191, 194, 196, 199, 200, 204, 205,
+153, 156, 167, 168, 169, 170, 176, 177, 180, 182,
+183, 184, 188, 189, 190, 191, 194, 196, 199, 200, 204, 205,
 206, 207, 208, 209, 212, 215, 219, 221, 226, 230, 237, 239, 241,
 242, 243, 244, 245, 246, 247, 249, 250, 251, 257, 264, 268, 269,
 270, 272, 273, 274, 275, 278, 280, 281, 282, 289, 292, 293, 294,
@@ -36,9 +36,12 @@ class VOESettings
     :Grass, :TallGrass, :DeepSand, :SpringGrass, :SpringTallGrass, :SummerGrass, :SummerTallGrass,
     :AutumnGrass, :AutumnTallGrass, :WinterGrass, :WinterTallGrass, :SpringRockyGrass, :SummerRockyGrass,
     :AutumnRockyGrass, :WinterRockyGrass, :SpringForestGrass, :SummerForestGrass, :AutumnForestGrass,
-    :WinterForestGrass,
+    :WinterForestGrass, :Grass_alt1, :Grass_alt2, :Grass_alt3, :SootGrass, :UnderwaterGrass,
   ]
-  WATER_TILES = [:Water, :StillWater, :Dirty_Water, :SpringWater, :SummerWater, :AutumnWater, :WinterWater]
+  WATER_TILES = [
+    :Water, :StillWater, :DeepWater, :WaterCurrent, :Waterfall, :WaterfallCrest,
+    :Dirty_Water, :SpringWater, :SummerWater, :AutumnWater, :WinterWater
+  ]
 
   FLEE_SOUND = "Door exit"
   SHINY_SOUND = "Mining reveal"
@@ -251,13 +254,46 @@ class VOESettings
 
     MAX_PER_MAP[0]
   end
+
+  def self.terrain_tag_at(x, y, map = $game_map)
+    return GameData::TerrainTag.get(:None) unless map
+    return map.terrain_tag(x, y)
+  rescue
+    return GameData::TerrainTag.get(:None)
+  end
+
+  def self.water_tag?(terrain_tag)
+    tag = GameData::TerrainTag.try_get(terrain_tag)
+    return false unless tag
+    return true if tag.can_surf || tag.waterfall || tag.waterfall_crest || tag.waterCurrent
+    WATER_TILES.include?(tag.id)
+  end
+
+  def self.grass_tag?(terrain_tag)
+    tag = GameData::TerrainTag.try_get(terrain_tag)
+    return false unless tag
+    return true if tag.land_wild_encounters || tag.deep_bush || tag.shows_grass_rustle
+    GRASS_TILES.include?(tag.id)
+  end
+
+  def self.water_tile?(x, y, map = $game_map)
+    water_tag?(terrain_tag_at(x, y, map))
+  end
+
+  def self.encounter_tile?(x, y, map = $game_map)
+    tag = terrain_tag_at(x, y, map)
+    return true if grass_tag?(tag)
+    return true if water_tag?(tag)
+    false
+  end
 end
 
 # Removed MenuHandlers.add
 
 class Spriteset_Map
-  alias voe_update  update
-  alias voe_dispose dispose
+  alias voe_update  update unless method_defined?(:voe_update)
+  alias voe_dispose dispose unless method_defined?(:voe_dispose)
+  
   def dispose
     VOESettings.clear_sparkles
     voe_dispose
@@ -552,7 +588,7 @@ module VOEOutbreak
           if event.instance_variable_get(:@event)
             event.instance_variable_get(:@event).name += " (Shiny)" unless event.name.include?("(Shiny)")
           end
-          water = VOESettings::WATER_TILES.include?(pbGetTileID($game_map.map_id, event.x, event.y))
+          water = VOESettings.water_tile?(event.x, event.y)
           pbChangeEventSprite(event, pkmn, water)
           pbVOESparkle(event) if $scene.respond_to?(:spriteset) && $scene.spriteset
         end
