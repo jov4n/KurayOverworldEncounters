@@ -552,10 +552,35 @@ module VOEOutbreak
       return @locked_species[category] || @locked_species[:Land]
     end
     
+    # Base shiny chance as "X out of 65536", matching Kuray's core shiny system.
+    def base_shiny_chance_out_of_65536
+      if defined?($PokemonSystem) && $PokemonSystem && $PokemonSystem.respond_to?(:shinyodds)
+        odds = $PokemonSystem.shinyodds
+        return odds.to_i.clamp(1, 65_536) if odds.is_a?(Numeric)
+      end
+      if defined?(Settings) && Settings.const_defined?(:SHINY_POKEMON_CHANCE)
+        odds = Settings::SHINY_POKEMON_CHANCE
+        return odds.to_i.clamp(1, 65_536) if odds.is_a?(Numeric)
+      end
+      # Legacy fallback for projects that use a 1/X denominator setting.
+      denom = VOESettings::SHINY_RATE
+      denom = 1 if !denom.is_a?(Numeric) || denom < 1
+      return (65_536.0 / denom).round.clamp(1, 65_536)
+    end
+
+    # Effective shiny chance as "X out of 65536".
+    def get_effective_shiny_chance
+      return 65_536 if shiny_panic_active?
+      chance = base_shiny_chance_out_of_65536
+      chance = (chance * @shiny_mult).to_i if @active
+      return chance.clamp(1, 65_536)
+    end
+
+    # Compatibility helper for older code paths expecting a 1/X denominator.
     def get_effective_shiny_rate
-      return 1 if shiny_panic_active?
-      return @shiny_mult if @active
-      return VOESettings::SHINY_RATE
+      chance = get_effective_shiny_chance
+      return 1 if chance >= 65_536
+      return [(65_536.0 / chance).round, 1].max
     end
 
     def shiny_panic_active?
@@ -1087,4 +1112,3 @@ class Game_Temp
   attr_accessor :outbreak_debug_panic_queued
   attr_accessor :outbreak_debug_end_queued
 end
-
