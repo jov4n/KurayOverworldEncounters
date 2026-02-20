@@ -213,17 +213,24 @@ def pbGenerateOverworldEncounters(water = false, full_map = false)
     pkmn.level = (pkmn.level + rand(-2..2)).clamp(2, GameData::GrowthRate.max_level)
     pkmn.calc_stats
     pkmn.reset_moves
-    shiny_rate = defined?(VOEOutbreak) ? VOEOutbreak.get_effective_shiny_rate : VOESettings::SHINY_RATE
-    if shiny_rate <= 1
+    shiny_chance = if defined?(VOEOutbreak)
+      VOEOutbreak.get_effective_shiny_chance
+    else
+      denom = VOESettings::SHINY_RATE
+      denom = 1 if !denom.is_a?(Numeric) || denom < 1
+      (65_536.0 / denom).round.clamp(1, 65_536)
+    end
+    if rand(65_536) < shiny_chance
       if pkmn.respond_to?(:makeShiny)
         pkmn.makeShiny
       else
         pkmn.shiny = true
       end
     else
-      pkmn.shiny = rand(shiny_rate) == 0
+      pkmn.shiny = false
     end
-    echoln "[VOE] Shiny check: #{pkmn.shiny?} (rate: 1/#{shiny_rate})" if VOESettings::LOG_SPAWNS
+    shiny_rate = (shiny_chance >= 65_536) ? 1 : (65_536.0 / shiny_chance).round
+    echoln "[VOE] Shiny check: #{pkmn.shiny?} (chance: #{shiny_chance}/65536, rate: 1/#{shiny_rate})" if VOESettings::LOG_SPAWNS
 
     echoln "#{pkmn.name} nature: #{pkmn.nature.id} (#{pkmn.nature.id.class.to_s})" if VOESettings::LOG_SPAWNS
 
