@@ -16,34 +16,40 @@ class PokemonEncounters
   alias voe_original_choose_wild_pokemon_for_map choose_wild_pokemon_for_map unless method_defined?(:voe_original_choose_wild_pokemon_for_map)
   
   def choose_wild_pokemon_for_map(map_ID, enc_type, chance_rolls = 1)
-    if !enc_type || !GameData::EncounterType.exists?(enc_type)
-      raise ArgumentError.new(_INTL("Encounter type {1} does not exist", enc_type))
+      if !enc_type || !GameData::EncounterType.exists?(enc_type)
+        raise ArgumentError.new(_INTL("Encounter type {1} does not exist", enc_type))
+      end
+      # Get the encounter table
+      encounter_data = getEncounterMode().get(map_ID, $PokemonGlobal.encounter_version)
+
+      return nil if !encounter_data
+      enc_list = encounter_data.types[enc_type]
+      if !@encounter_tables.nil? and !@encounter_tables.empty?
+        enc_list = @encounter_tables[enc_type]
+      end
+      echoln enc_list
+      return nil if !enc_list || enc_list.length == 0
+      # Calculate the total probability value
+      chance_total = 0
+      enc_list.each { |a| chance_total += a[0] }
+      # Choose a random entry in the encounter table based on entry probabilities
+      rnd = 0
+      chance_rolls.times do
+        r = rand(chance_total)
+        rnd = r if r > rnd   # Prefer rarer entries if rolling repeatedly
+      end
+      encounter = nil
+      enc_list.each do |enc|
+        rnd -= enc[0]
+        next if rnd >= 0
+        encounter = enc
+        break
+      end
+      # Return [species, level]
+      level = rand(encounter[2]..encounter[3])
+      return [encounter[1], level]
     end
-    # Get the encounter table
-    encounter_data = getEncounterMode().get(map_ID, $PokemonGlobal.encounter_version)
-    return nil if !encounter_data
-    enc_list = encounter_data.types[enc_type]
-    return nil if !enc_list || enc_list.length == 0
-    # Calculate the total probability value
-    chance_total = 0
-    enc_list.each { |a| chance_total += a[0] }
-    # Choose a random entry in the encounter table based on entry probabilities
-    rnd = 0
-    chance_rolls.times do
-      r = rand(chance_total)
-      rnd = r if r > rnd   # Prefer rarer entries if rolling repeatedly
-    end
-    encounter = nil
-    enc_list.each do |enc|
-      rnd -= enc[0]
-      next if rnd >= 0
-      encounter = enc
-      break
-    end
-    # Return [species, level]
-    level = rand(encounter[2]..encounter[3])
-    return [encounter[1], level]
-  end
+
 end
 
 # Graphics functions
